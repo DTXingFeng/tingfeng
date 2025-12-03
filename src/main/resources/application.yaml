@@ -1,3 +1,19 @@
 spring:
   application:
     name: tingfeng
+  datasource:
+    driver-class-name: org.sqlite.JDBC
+    url: jdbc:sqlite:./data/tingfeng.db
+  sql:
+    init:
+      mode: always
+      encoding: UTF-8
+      schema-locations: classpath:schema.sql
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+shiro:
+  ws:
+    client:
+        enable: true
+        url: "ws://192.168.8.240:3001"
