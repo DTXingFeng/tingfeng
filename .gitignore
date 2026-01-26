@@ -82,3 +82,7 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Large files
+*.tar
+tingfeng-bot.tar
