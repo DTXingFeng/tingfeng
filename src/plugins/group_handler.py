@@ -1,6 +1,6 @@
 from nonebot import on_message
 from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
-from src.utils.message_processor import process_message_for_llm
+from src.utils.message_processor import process_message_for_llm, split_text_to_segments
 from src.aimodel.image_processing.vlm import get_vlm_description
 from src.config.config import bot_config
 from src.utils.db_manager import db_manager
@@ -182,15 +182,26 @@ async def process_my_logic(
             db_manager.add_chat_log(group_id, f"self:{reply_text}")
         
         # 3. 分段发送回复，模拟真人感
-        # 先发文字
         if reply_text:
-            await bot.send(event, MessageSegment.text(reply_text), at_sender=False)
+            # 根据文本长度决定是否分段
+            if len(reply_text) > 40 or "\n" in reply_text:
+                segments = split_text_to_segments(reply_text)
+                for i, seg in enumerate(segments):
+                    await bot.send(event, MessageSegment.text(seg), at_sender=False)
+                    # 如果不是最后一段，或者后面还有表情包，就等一下
+                    if i < len(segments) - 1 or sticker_url:
+                        # 模拟打字速度：根据下一段的长度决定延迟时间
+                        next_len = len(segments[i+1]) if i < len(segments) - 1 else 10
+                        delay = min(2.0, max(0.4, next_len * 0.05)) # 每字 0.05s，最少 0.4s，最多 2s
+                        await asyncio.sleep(delay + random.uniform(0.1, 0.4))
+            else:
+                # 短文本直接发
+                await bot.send(event, MessageSegment.text(reply_text), at_sender=False)
+                if sticker_url:
+                    await asyncio.sleep(random.uniform(0.5, 1.2))
         
-        # 如果有表情包，稍微等一下再发，避免堆在一起
+        # 发送表情包
         if sticker_url:
-            if reply_text:
-                # 随机延迟 0.5 到 1.5 秒
-                await asyncio.sleep(random.uniform(0.5, 1.5))
             await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
     
     # 打印分类信息

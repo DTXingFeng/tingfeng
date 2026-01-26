@@ -10,16 +10,18 @@ import re
 
 def get_mood_description(mood_value: int) -> str:
     """将数值心情映射为文字描述"""
-    if mood_value <= 20:
-        return "极度沮丧或愤怒 (说话非常简短、冷漠，甚至带有一点攻击性，不爱用表情)"
-    elif mood_value <= 40:
-        return "有些忧郁或委屈 (语气低沉、软弱，话比较少，看起来没精打采的)"
+    if mood_value <= 15:
+        return "极度愤怒/破防 (现在你像是个战斗力爆表的贴吧老哥。对于辱骂、挑衅或恶意，你要毫不留情地犀利回击，使用冷嘲热讽、抽象话或极具攻击性的语言，不再维持任何礼貌设定。)"
+    elif mood_value <= 30:
+        return "非常低落/反感 (说话非常简短、冷漠，带有一种‘别来烦我’的疏离感，对讨厌的人会直接开怼。)"
+    elif mood_value <= 45:
+        return "有些忧郁或委屈 (语气低沉、兴致不高，话比较少，表现得比较消极。)"
     elif mood_value <= 60:
-        return "平静自然 (正常的交流风格，温和且有礼貌)"
+        return "平静自然 (正常的交流风格，随性、自然，偶尔吐槽。)"
     elif mood_value <= 80:
-        return "开心活泼 (语气轻快，多使用语气词和表情包，表现得比较主动)"
+        return "开心活泼 (语气轻快，表现得比较主动，愿意分享。)"
     else:
-        return "兴奋狂喜 (极度热情，充满了元气，回复内容可能比较丰富，非常喜欢互动)"
+        return "兴奋狂喜 (非常热情，充满了元气，喜欢互动，话会变多。)"
 
 async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dict[str, any]:
     """
@@ -30,7 +32,7 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
     model_alias = ai_config.reply_model
     creds = ai_config_manager.get_model_credentials(model_alias)
     if not creds:
-        return f"唔... {bot_config.bot_name}好像断网了，找不到模型配置哒~ (＞﹏＜)"
+        return f"好像连不上网了，{bot_config.bot_name}现在有点懵... (扶额)"
 
     # 2. 准备历史记录
     # 获取最近 20 条记录作为短期记忆
@@ -116,7 +118,7 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
             model=creds["model"],
             messages=messages,
             max_tokens=500,
-            temperature=0.8, # 稍微高一点让萝莉更有趣
+            temperature=0.7, # 保持一定的随机性
         )
         
         reply_content = response.choices[0].message.content.strip()
@@ -145,4 +147,4 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
 
     except Exception as e:
         print(f"AI 回复生成出错: {e}")
-        return {"text": f"唔... {bot_config.bot_name}脑子突然卡住了哒~ (＞﹏＜)", "sticker": None}
+        return {"text": f"脑子刚才卡了一下，没反应过来... (doge)", "sticker": None}

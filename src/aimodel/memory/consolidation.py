@@ -90,11 +90,8 @@ async def consolidate_memories(group_id: int):
                 if "|" not in line and len(line) > 3:
                     facts.append(line)
 
-        # 应用氛围调整和自然回正
-        # 每处理一批消息，心情会向 50 自动回正 2 点
-        current_mood = db_manager.get_mood(group_id)
-        drift = 2 if current_mood < 50 else (-2 if current_mood > 50 else 0)
-        db_manager.update_mood(group_id, mood_adjustment + drift)
+        # 应用氛围调整
+        db_manager.update_mood(group_id, mood_adjustment)
 
         if facts:
             # 批量获取向量

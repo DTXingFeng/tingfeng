@@ -231,6 +231,13 @@ class DBManager:
             conn.commit()
             return 50
 
+    def get_all_group_moods(self) -> List[Tuple[int, int]]:
+        """获取所有记录了心情值的群组"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT group_id, mood_value FROM bot_moods")
+            return cursor.fetchall()
+
     def update_mood(self, group_id: int, delta: int):
         """更新心情值 (增加或减少)"""
         current_mood = self.get_mood(group_id)

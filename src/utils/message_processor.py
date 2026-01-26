@@ -2,6 +2,8 @@ from typing import List, Optional
 from nonebot.adapters.onebot.v11 import Message, MessageSegment, Bot, GroupMessageEvent
 from src.config.config import bot_config
 
+import re
+
 # 常用表情 ID 到文字的映射 (示例，实际可扩充)
 FACE_MAP = {
     "124": "呲牙",
@@ -20,6 +22,43 @@ FACE_MAP = {
     "12": "调皮",
     "13": "呲牙",
 }
+
+def split_text_to_segments(text: str, max_len: int = 100) -> List[str]:
+    """
+    将文本拆分为多个自然段落，用于分段发送。
+    优先按换行符拆分，其次按句末标点拆分。
+    """
+    if not text:
+        return []
+    
+    # 1. 首先按换行符拆分
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    segments = []
+    
+    for line in lines:
+        if len(line) <= max_len:
+            segments.append(line)
+        else:
+            # 2. 如果一行太长，按句末标点拆分
+            # 匹配 。！？! ? ... 以及这些标点后可能跟着的右括号/引号
+            sub_parts = re.split(r'([。！？!?\n]+|[\.]{3,})', line)
+            
+            current_seg = ""
+            for i in range(0, len(sub_parts), 2):
+                part = sub_parts[i]
+                punc = sub_parts[i+1] if i+1 < len(sub_parts) else ""
+                
+                if len(current_seg) + len(part) + len(punc) <= max_len:
+                    current_seg += part + punc
+                else:
+                    if current_seg:
+                        segments.append(current_seg.strip())
+                    current_seg = part + punc
+            
+            if current_seg:
+                segments.append(current_seg.strip())
+                
+    return [s for s in segments if s]
 
 async def get_message_abstract(bot: Bot, message_id: int) -> str:
     """获取消息内容的摘要，用于回复显示"""
