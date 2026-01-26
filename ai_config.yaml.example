@@ -1,0 +1,30 @@
+platforms:
+  deepseek_official:
+    base_url: "https://api.deepseek.com/v1"
+    api_key: "sk-your-deepseek-api-key"
+    description: "DeepSeek 官方 API"
+  # 硅基流动
+  siliconflow_official:
+    base_url: "https://api.siliconflow.cn/v1"
+    api_key: "sk-your-siliconflow-api-key"
+    description: "硅基流动官方 API"
+
+models:
+  ds_chat:
+    platform_alias: "deepseek_official"
+    model_name: "deepseek-chat"
+    description: "DeepSeek 官方对话模型"
+  ds_reasoner:
+    platform_alias: "deepseek_official"
+    model_name: "deepseek-reasoner"
+    description: "DeepSeek R1 思考模型"
+  qwen_vl_8b:
+    platform_alias: "siliconflow_official"
+    model_name: "Qwen/Qwen3-VL-8B-Instruct"
+    description: "硅基流动 Qwen VL 8B 模型"
+
+# 功能绑定
+reply_model: "ds_chat"
+decision_model: "ds_reasoner"
+memory_model: "ds_chat"
+image_model: "qwen_vl_8b"
