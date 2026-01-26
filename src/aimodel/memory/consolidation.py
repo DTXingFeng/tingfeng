@@ -44,6 +44,9 @@ async def consolidate_memories(group_id: int):
         "提取用户提到的**具体、持久**的信息。每个人可以有多个记忆点。\n"
         "格式：'USER_MEMORY|用户名|记忆点内容'。\n"
         "例如：'USER_MEMORY|张三|家里养了一只叫旺财的拉布拉多'、'USER_MEMORY|李四|目前在深圳做前端开发'。\n\n"
+        "### 任务 4：评估群聊氛围 (Atmosphere)\n"
+        "根据这组记录，评估目前群里的气氛对你的影响。是大家都在欺负你，还是大家都很热情？\n"
+        "格式：'ATMOSPHERE|数值' (数值范围 -20 到 20，负数表示不开心，正数表示开心)。\n\n"
         "如果没有值得记录的信息，请直接回复'无'。\n\n"
         f"聊天记录如下：\n{chat_content}"
     )
@@ -63,6 +66,7 @@ async def consolidate_memories(group_id: int):
         # 3. 解析并存入
         lines = [line.strip("- ").strip() for line in output.split("\n") if line.strip()]
         facts = []
+        mood_adjustment = 0
         for line in lines:
             if line.startswith("USER_PROFILE|"):
                 parts = line.split("|")
@@ -74,10 +78,23 @@ async def consolidate_memories(group_id: int):
                 if len(parts) >= 3:
                     u_name, u_memory = parts[1].strip(), parts[2].strip()
                     db_manager.add_user_specific_memory(group_id, u_name, u_memory)
+            elif line.startswith("ATMOSPHERE|"):
+                parts = line.split("|")
+                if len(parts) >= 2:
+                    try:
+                        mood_adjustment = int(parts[1].strip())
+                    except:
+                        pass
             else:
                 # 任务 1 的事实
                 if "|" not in line and len(line) > 3:
                     facts.append(line)
+
+        # 应用氛围调整和自然回正
+        # 每处理一批消息，心情会向 50 自动回正 2 点
+        current_mood = db_manager.get_mood(group_id)
+        drift = 2 if current_mood < 50 else (-2 if current_mood > 50 else 0)
+        db_manager.update_mood(group_id, mood_adjustment + drift)
 
         if facts:
             # 批量获取向量

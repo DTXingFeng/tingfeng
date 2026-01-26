@@ -1,0 +1,24 @@
+# 忽略 Git 文件夹
+.git
+.gitignore
+
+# 忽略虚拟环境
+venv
+.venv
+__pycache__
+*.pyc
+
+# 忽略本地开发的数据和日志
+data/
+*.log
+*.db
+*.sqlite3
+
+# 忽略敏感配置（镜像内应使用生成的默认配置或挂载）
+.env
+config.yaml
+ai_config.yaml
+
+# 忽略 IDE 缓存
+.vscode
+.idea

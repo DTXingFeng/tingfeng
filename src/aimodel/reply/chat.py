@@ -8,6 +8,19 @@ from typing import List, Optional, Dict
 import random
 import re
 
+def get_mood_description(mood_value: int) -> str:
+    """将数值心情映射为文字描述"""
+    if mood_value <= 20:
+        return "极度沮丧或愤怒 (说话非常简短、冷漠，甚至带有一点攻击性，不爱用表情)"
+    elif mood_value <= 40:
+        return "有些忧郁或委屈 (语气低沉、软弱，话比较少，看起来没精打采的)"
+    elif mood_value <= 60:
+        return "平静自然 (正常的交流风格，温和且有礼貌)"
+    elif mood_value <= 80:
+        return "开心活泼 (语气轻快，多使用语气词和表情包，表现得比较主动)"
+    else:
+        return "兴奋狂喜 (极度热情，充满了元气，回复内容可能比较丰富，非常喜欢互动)"
+
 async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dict[str, any]:
     """
     获取 AI 回复逻辑
@@ -22,6 +35,12 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
     # 2. 准备历史记录
     # 获取最近 20 条记录作为短期记忆
     history = db_manager.get_chat_log(group_id, limit=20)
+    
+    # 获取心情值
+    mood_desc = ""
+    if bot_config.enable_mood:
+        mood_value = db_manager.get_mood(group_id)
+        mood_desc = get_mood_description(mood_value)
     
     # 获取相关长期记忆 (RAG)
     long_term_memories = []
@@ -41,6 +60,10 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
     if bot_config.identity:
         system_prompt = f"{bot_config.identity}\n\n{system_prompt}"
 
+    # 注入当前心情
+    if bot_config.enable_mood and mood_desc:
+        system_prompt += f"\n\n### 当前心情状态：\n你现在的心情是：{mood_desc}。请在回复时严格遵守当前的心情状态，调整你的语气、措辞和回复长度。"
+        
     # 引导 AI 使用表情包
     system_prompt += (
         "\n\n### 表情包使用指南：\n"
@@ -98,17 +121,19 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
         
         reply_content = response.choices[0].message.content.strip()
         
-        # 提取并处理表情包标签
+        # 1. 提取并处理表情包标签
         sticker_url = None
-        match = re.search(r'\[表情:(.*?)\]', reply_content)
-        if match:
-            tag = match.group(1).strip()
+        sticker_pattern = r'\[\s*表情\s*[:：]\s*(.*?)\s*\]'
+        sticker_match = re.search(sticker_pattern, reply_content)
+        if sticker_match:
+            tag = sticker_match.group(1).strip()
             # 从数据库中随机选一个对应标签的表情包
             available_stickers = db_manager.get_stickers_by_tag(tag)
             if available_stickers:
                 sticker_url = random.choice(available_stickers)["file_id"]
-            # 移除文本中的标签
-            reply_content = re.sub(r'\[表情:.*?\]', '', reply_content).strip()
+        
+        # 无论是否找到对应表情，都从文本中移除标签
+        reply_content = re.sub(r'\[\s*表情\s*[:：].*?\]', '', reply_content).strip()
 
         # 移除可能的 "self:" 或 "听风:" 前缀（如果 AI 自动带上的话）
         if reply_content.startswith("self:"):

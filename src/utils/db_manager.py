@@ -70,6 +70,16 @@ class DBManager:
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            # 创建心情表
+            # group_id: 群号 (心情按群独立)
+            # mood_value: 心情值，0-100 (0: 极差, 50: 平静, 100: 极好)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bot_moods (
+                    group_id INTEGER PRIMARY KEY,
+                    mood_value INTEGER DEFAULT 50,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             conn.commit()
 
     def add_chat_log(self, group_id: int, msg: str):
@@ -207,6 +217,32 @@ class DBManager:
             )
             rows = cursor.fetchall()
             return [{"file_id": row[0], "description": row[1]} for row in rows]
+
+    def get_mood(self, group_id: int) -> int:
+        """获取群聊对应的心情值"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT mood_value FROM bot_moods WHERE group_id = ?", (group_id,))
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+            # 如果不存在，初始化为 50
+            cursor.execute("INSERT INTO bot_moods (group_id, mood_value) VALUES (?, 50)", (group_id,))
+            conn.commit()
+            return 50
+
+    def update_mood(self, group_id: int, delta: int):
+        """更新心情值 (增加或减少)"""
+        current_mood = self.get_mood(group_id)
+        new_mood = max(0, min(100, current_mood + delta))
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                UPDATE bot_moods SET mood_value = ?, updated_at = CURRENT_TIMESTAMP 
+                WHERE group_id = ?
+            ''', (new_mood, group_id))
+            conn.commit()
+        return new_mood
 
 # 全局单例
 db_manager = DBManager()

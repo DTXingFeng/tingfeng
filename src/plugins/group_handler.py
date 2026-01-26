@@ -102,34 +102,31 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     # 7. 唤醒逻辑判断
     is_at_me = "@self" in llm_text or event.is_tome()
     is_mentioned = bot_config.bot_name in message_text
+    is_actively_engaged = is_at_me or is_mentioned
     
-    # 核心决策逻辑
     do_reply = False
-    if is_at_me or is_mentioned:
-        # 1. 被显式叫到了，肯定要回，不计入决策间隔
-        do_reply = True
-    else:
-        # 2. 没被叫到，尝试进行 AI 智能决策
+    
+    # 只有在被艾特，或者满足随机触发概率且过了冷却期时，才调用决策引擎
+    should_evaluate = is_actively_engaged
+    if not should_evaluate:
         current_time = time.time()
         last_time = last_decision_times.get(group_id, 0)
-        
-        # 检查是否过了决策冷却期
         if current_time - last_time >= bot_config.decision_interval:
-            # 只有在随机概率通过时才去问 AI (进一步节省 API 消耗)
             if random.random() < bot_config.reply_rate:
-                # 更新最后一次决策时间
+                should_evaluate = True
                 last_decision_times[group_id] = current_time
-                
-                # AI 决定是否感兴趣或者是否在回它
-                decision = await should_i_reply(group_id, display_name, llm_text)
-                
-                if decision:
-                    if decision.get("is_replying_to_bot"):
-                        # 如果 AI 判定对方是在回我，则 100% 响应
-                        do_reply = True
-                    elif decision.get("interest_score", 0) > 0.6:
-                        # 话题感兴趣，则触发回复
-                        do_reply = True
+
+    if should_evaluate:
+        # 核心决策逻辑：通过决策引擎评估回复和心情影响
+        decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=is_actively_engaged)
+        
+        do_reply = decision.get("should_reply", False)
+
+        # 实时更新心情 (仅在决定回复时更新)
+        if do_reply:
+            mood_impact = decision.get("mood_impact", 0)
+            if mood_impact != 0:
+                db_manager.update_mood(group_id, mood_impact)
 
     if not do_reply:
         return

@@ -9,6 +9,7 @@ class BotConfig(BaseModel):
     identity: str = "你是一个性格温和、有些害羞的二次元少女，名字叫听风。你喜欢和大家聊天，但说话比较委婉。"
     prompt: str = "请以听风的身份进行回复。保持角色设定，不要提及你是AI。"
     reply_rate: float = 0.0  # 默认 0.0，强制艾特才回复
+    enable_mood: bool = True # 是否启用心情系统
     decision_interval: int = 60 # 决策间隔时间（秒）
     allowed_groups: List[int] = Field(default_factory=list) # 白名单
     blocked_groups: List[int] = Field(default_factory=list) # 黑名单
