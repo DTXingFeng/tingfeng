@@ -2,21 +2,26 @@ import asyncio
 import base64
 import httpx
 import io
+import hashlib
 from PIL import Image
 from openai import AsyncOpenAI
 from src.config.ai_config import ai_config, ai_config_manager
+from src.utils.db_manager import db_manager
 
-async def process_and_encode_image(url: str, max_size: int = 1024) -> str:
+async def process_and_encode_image(url: str, max_size: int = 1024) -> tuple[str, str]:
     """
-    从 URL 下载图片，如果长边超过 max_size 则等比缩小，并返回 base64 编码
+    下载图片并返回 (base64编码, 内容哈希)
     """
     async with httpx.AsyncClient() as client:
         response = await client.get(url)
         if response.status_code != 200:
             raise Exception(f"Failed to fetch image: {response.status_code}")
         
+        content = response.content
+        file_hash = hashlib.md5(content).hexdigest()
+
         # 加载图片
-        img_bytes = io.BytesIO(response.content)
+        img_bytes = io.BytesIO(content)
         img = Image.open(img_bytes)
         
         # 处理动图 (GIF, WebP 等)
@@ -44,13 +49,28 @@ async def process_and_encode_image(url: str, max_size: int = 1024) -> str:
         # 转换回 base64
         buffered = io.BytesIO()
         img.save(buffered, format="JPEG", quality=85)
-        return base64.b64encode(buffered.getvalue()).decode("utf-8")
+        base64_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        
+        return base64_str, file_hash
 
-async def describe_image(image_url: str) -> str:
+async def describe_image(image_url: str, is_sticker: bool = False) -> str:
     """
-    使用 VLM 模型识别图片内容
+    使用 VLM 模型识别图片内容。如果是表情包，会进行缓存处理。
     """
-    # 1. 获取配置
+    # 1. 预处理并获取哈希
+    try:
+        base64_image, file_hash = await process_and_encode_image(image_url)
+    except Exception as e:
+        return f"图片处理失败: {str(e)}"
+
+    # 2. 如果是表情包，检查缓存
+    if is_sticker:
+        cache = db_manager.get_sticker_cache(file_hash)
+        if cache:
+            # print(f"命中表情包缓存: {cache['tag']} - {cache['description']}")
+            return f"[表情描述: {cache['description']}, 标签: {cache['tag']}]"
+
+    # 3. 获取 AI 配置
     model_alias = ai_config.image_model
     if not model_alias:
         return "未配置图像识别模型"
@@ -59,27 +79,25 @@ async def describe_image(image_url: str) -> str:
     if not creds:
         return f"找不到模型别名 '{model_alias}' 的配置"
 
-    # 2. 准备客户端
-    client = AsyncOpenAI(
-        api_key=creds["api_key"],
-        base_url=creds["base_url"]
-    )
+    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
 
-    # 3. 下载并处理图片
-    try:
-        base64_image = await process_and_encode_image(image_url)
-    except Exception as e:
-        return f"图片处理失败: {str(e)}"
-
-    # 4. 发送请求
-    try:
-        # 提示词要求：识别类型（梗图、游戏等），抓住群聊语境下的重点
+    # 4. 准备提示词
+    if is_sticker:
+        prompt = (
+            "请识别这张表情包的内容并完成以下任务：\n"
+            "1. 描述表情包的核心视觉信息（文字、动作、神情）。\n"
+            "2. 为其打上一个情感标签（如：开心、大哭、暴躁、委屈、傲娇、得意、摸摸头、疑惑、震惊）。\n"
+            "输出格式要求：'标签|描述'。例如：'开心|一只可爱的猫咪在笑，旁边写着好耶'。"
+        )
+    else:
         prompt = (
             "请用一句话描述这张图片，需重点识别其在群聊语境下的属性（如：梗图/Meme、游戏截图、生活照、网页截图等）。要求：\n"
             "1. 描述最核心的视觉信息及意图（如梗图的槽点、游戏的具体场景）。\n"
             "2. 字数控制在 60 字以内，直接输出描述。"
         )
 
+    # 5. 发送请求
+    try:
         response = await client.chat.completions.create(
             model=creds["model"],
             messages=[
@@ -97,17 +115,30 @@ async def describe_image(image_url: str) -> str:
             max_tokens=500,
         )
 
-        description = response.choices[0].message.content.strip()
-        return description
+        result = response.choices[0].message.content.strip()
+        
+        # 6. 如果是表情包，解析并存入缓存
+        if is_sticker:
+            if "|" in result:
+                tag, desc = result.split("|", 1)
+                tag = tag.strip()
+                desc = desc.strip()
+                db_manager.save_sticker_cache(file_hash, desc, tag, image_url)
+                return f"[表情描述: {desc}, 标签: {tag}]"
+            else:
+                # 兜底处理
+                db_manager.save_sticker_cache(file_hash, result, "未知", image_url)
+                return f"[表情描述: {result}]"
+        
+        return result
 
     except Exception as e:
         return f"图像识别出错: {str(e)}"
 
-async def get_vlm_description(url: str) -> str:
+async def get_vlm_description(url: str, is_sticker: bool = False) -> str:
     """包装函数，供 message_processor 调用"""
     if not url:
         return "图片 URL 为空"
     
-    # 在这里实现真正的识别逻辑
-    description = await describe_image(url)
+    description = await describe_image(url, is_sticker=is_sticker)
     return description

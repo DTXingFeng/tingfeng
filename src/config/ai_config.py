@@ -18,10 +18,11 @@ class AIConfig(BaseModel):
     models: Dict[str, ModelConfig] = {}
     
     # 功能绑定配置
-    reply_model: str = ""   # 回复功能使用的模型别名
-    decision_model: str = "" # 决策功能使用的模型别名
-    memory_model: str = ""   # 记忆功能使用的模型别名
-    image_model: str = ""    # 图像识别使用的模型别名
+    reply_model: str = ""         # 回复功能使用的模型别名
+    decision_model: str = ""      # 决策功能使用的模型别名
+    memory_model: str = ""        # 嵌入模型使用的别名
+    consolidation_model: str = "" # 记忆固化/总结使用的模型别名
+    image_model: str = ""         # 图像识别使用的模型别名
 
 class AIConfigManager:
     _instance = None

@@ -1,9 +1,20 @@
 from nonebot import on_message
-from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent
+from nonebot.adapters.onebot.v11 import Bot, GroupMessageEvent, Message, MessageSegment
 from src.utils.message_processor import process_message_for_llm
 from src.aimodel.image_processing.vlm import get_vlm_description
 from src.config.config import bot_config
+from src.utils.db_manager import db_manager
+from src.aimodel.reply.chat import get_chat_reply
+from src.aimodel.memory.embeddings import get_embeddings
+from src.aimodel.memory.vector_db import vector_db
+from src.aimodel.memory.consolidation import consolidate_memories
+from src.aimodel.decision.decide import should_i_reply
 import random
+import asyncio
+import time
+
+# 记录每个群最后一次进行 AI 决策的时间
+last_decision_times = {}
 
 # 创建一个响应所有消息的响应器
 # 因为已经在 bot.py 做了全局过滤，所以这里的 on_message() 实际上只会收到群消息
@@ -14,6 +25,14 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     """
     当接收到群消息时，NoneBot 会调用这个方法。
     """
+    # 0. 群组过滤 (白名单/黑名单)
+    group_id = event.group_id
+    if bot_config.blocked_groups and group_id in bot_config.blocked_groups:
+        return # 黑名单群组直接忽略
+    
+    if bot_config.allowed_groups and group_id not in bot_config.allowed_groups:
+        return # 不在白名单中的群组直接忽略
+
     # 1. 基础信息
     message_id = event.message_id        # 消息 ID
     message_text = event.get_plaintext() # 纯文本内容
@@ -24,6 +43,8 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     sender = event.sender
     nickname = sender.nickname
     card = sender.card or nickname
+    # 使用全局昵称作为 AI 识别的名称，因为群名片更改太频繁
+    display_name = nickname
     role = sender.role
     
     # 3. 提取各种消息段
@@ -58,10 +79,59 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     # 5. 生成供 LLM 使用的清洗后文本
     llm_text = await process_message_for_llm(bot, event, vlm_func=get_vlm_description)
     
-    # 6. 回复率过滤 (如果不是艾特我，则根据回复率决定是否处理)
+    # 6. 存入数据库 (格式: "名字:内容")
+    msg_to_store = f"{display_name}:{llm_text}"
+    db_manager.add_chat_log(group_id, msg_to_store)
+    
+    # 同步写入向量数据库 (长期记忆)
+    # 使用 create_task 异步处理，不影响当前响应速度
+    async def store_and_consolidate():
+        try:
+            # 1. 存入原始向量记录
+            vectors = await get_embeddings([msg_to_store])
+            vector_db.add_memory(group_id, msg_to_store, vectors[0])
+            
+            # 2. 尝试进行记忆固化 (每 20 条消息处理一次)
+            # 我们直接在后台运行，不阻塞
+            await consolidate_memories(group_id)
+        except Exception as e:
+            print(f"写入向量库或固化失败: {e}")
+    
+    asyncio.create_task(store_and_consolidate())
+    
+    # 7. 唤醒逻辑判断
     is_at_me = "@self" in llm_text or event.is_tome()
-    if not is_at_me and random.random() > bot_config.reply_rate:
-        # print(f"  - 随机过滤: 回复率 {bot_config.reply_rate}，本次跳过")
+    is_mentioned = bot_config.bot_name in message_text
+    
+    # 核心决策逻辑
+    do_reply = False
+    if is_at_me or is_mentioned:
+        # 1. 被显式叫到了，肯定要回，不计入决策间隔
+        do_reply = True
+    else:
+        # 2. 没被叫到，尝试进行 AI 智能决策
+        current_time = time.time()
+        last_time = last_decision_times.get(group_id, 0)
+        
+        # 检查是否过了决策冷却期
+        if current_time - last_time >= bot_config.decision_interval:
+            # 只有在随机概率通过时才去问 AI (进一步节省 API 消耗)
+            if random.random() < bot_config.reply_rate:
+                # 更新最后一次决策时间
+                last_decision_times[group_id] = current_time
+                
+                # AI 决定是否感兴趣或者是否在回它
+                decision = await should_i_reply(group_id, display_name, llm_text)
+                
+                if decision:
+                    if decision.get("is_replying_to_bot"):
+                        # 如果 AI 判定对方是在回我，则 100% 响应
+                        do_reply = True
+                    elif decision.get("interest_score", 0) > 0.6:
+                        # 话题感兴趣，则触发回复
+                        do_reply = True
+
+    if not do_reply:
         return
 
     # --- 调用处理逻辑 ---
@@ -78,7 +148,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         group_id=group_id,
         user_id=user_id,
         nickname=nickname,
-        card=card,
+        card=display_name,
         role=role,
         raw_msg=raw_message
     )
@@ -103,16 +173,31 @@ async def process_my_logic(
     """
     这就是您要编写代码的方法。
     """
-    # 打印分类信息
-    print(f"[{role}] {card}({user_id}) 在群 {group_id} 发送了:")
-    if text: print(f"  - 原始文字: {text}")
-    if llm_text: print(f"  - 清洗后文本 (LLM): {llm_text}")
-    print(f"  - 使用提示词: {bot_config.prompt[:20]}...")
-    if normal_images: print(f"  - 普通图片: {len(normal_images)} 张")
-    if stickers: print(f"  - 表情包: {len(stickers)} 个")
-    if flash_images: print(f"  - 闪照: {len(flash_images)} 张")
-    if faces: print(f"  - 系统表情 ID 列表: {faces}")
+    # 1. 获取 AI 回复
+    # 使用异步调用，不会阻塞其他消息的处理
+    reply_data = await get_chat_reply(group_id, card, llm_text)
+    reply_text = reply_data.get("text")
+    sticker_url = reply_data.get("sticker")
     
-    # 在这里开始写您的代码...
-    pass
+    if reply_text or sticker_url:
+        # 2. 存入数据库 (只存文字内容)
+        if reply_text:
+            db_manager.add_chat_log(group_id, f"self:{reply_text}")
+        
+        # 3. 分段发送回复，模拟真人感
+        # 先发文字
+        if reply_text:
+            await bot.send(event, MessageSegment.text(reply_text), at_sender=False)
+        
+        # 如果有表情包，稍微等一下再发，避免堆在一起
+        if sticker_url:
+            if reply_text:
+                # 随机延迟 0.5 到 1.5 秒
+                await asyncio.sleep(random.uniform(0.5, 1.5))
+            await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
+    
+    # 打印分类信息
+    print(f"[{role}] {card}({user_id}) [QQ昵称] 唤醒了{bot_config.bot_name}:")
+    print(f"  - 清洗后文本 (LLM): {llm_text}")
+    print(f"  - {bot_config.bot_name}回复: {reply_text}")
     

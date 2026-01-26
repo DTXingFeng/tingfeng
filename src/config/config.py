@@ -1,7 +1,7 @@
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 
 class BotConfig(BaseModel):
     bot_name: str = "听风"
@@ -9,6 +9,9 @@ class BotConfig(BaseModel):
     identity: str = ""
     prompt: str = ""
     reply_rate: float = 1.0  # 回复率，0.0 到 1.0 之间
+    decision_interval: int = 60 # 决策间隔时间（秒）
+    allowed_groups: List[int] = Field(default_factory=list) # 白名单
+    blocked_groups: List[int] = Field(default_factory=list) # 黑名单
 
     class Config:
         arbitrary_types_allowed = True

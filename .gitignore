@@ -9,6 +9,12 @@ config.yaml
 
 # Virtual environment
 .venv/
+venv/
+
+# Database and Vector DB
+data/
+*.db
+*.sqlite3
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

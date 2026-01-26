@@ -1,5 +1,8 @@
 bot_name: "听风"
 bot_qq: "123456789"
-identity: ""
-prompt: ""
-reply_rate: 1.0
+identity: "这里填写机器人的核心人设，例如：一个聪明、活泼的二次元少女。"
+prompt: "这里填写详细的系统提示词（System Prompt），包括性格、说话风格、禁忌等。"
+reply_rate: 0.2              # 随机回复概率 (0.0 - 1.0)
+decision_interval: 60        # 智能决策的最小间隔时间（秒），避免过于频繁地触发 AI 决策
+allowed_groups: []           # 白名单群号列表，留空则允许所有群
+blocked_groups: []           # 黑名单群号列表

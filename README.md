@@ -1,126 +1,82 @@
-# TingFengBot
+# TingFengBot (听风)
 
-一个基于 NoneBot2 和 OneBot V11 协议的智能聊天机器人，具备 AI 模型集成和插件化架构。
+一个基于 NoneBot2 和 OneBot V11 协议的深度智能化聊天机器人。它不仅能聊天，还具备“察言观色”的决策能力、长短期记忆系统以及智能表情包互动功能。
 
-## 功能特性
+## ✨ 核心特性
 
-- 🤖 支持 OneBot V11 协议，兼容多种 QQ 机器人框架
-- 🧠 集成 AI 模型处理能力（视觉语言模型、决策模块等）
-- 🔌 模块化插件系统，易于扩展功能
-- 🛡️ 安全性设计，默认忽略私聊消息
-- 📁 清晰的目录结构，便于维护和开发
+- 🧠 **智能决策系统 (Decision Making)**：
+  - 不再仅仅依赖艾特或随机概率。
+  - 使用小模型（如 Qwen-7B）实时分析对话语境，判断用户是否在接话或话题是否符合人设兴趣，实现自然插话。
+  - 具备**决策冷却机制**，避免在活跃群聊中过度打扰。
 
-## 项目结构
+- 📚 **多维记忆系统 (Memory System)**：
+  - **短期记忆**：基于数据库的最近对话上下文。
+  - **长期记忆 (RAG)**：基于 ChromaDB 向量数据库，通过语义搜索找回很久以前的往事。
+  - **用户画像与细节记忆**：自动提炼用户的性格特征（Profile）和具体事实（Specific Memories，如职业、爱好），实现“越聊越懂你”。
+
+- 🖼️ **智能视觉与表情包 (VLM & Sticker)**：
+  - **看图识梗**：集成 Qwen2-VL-72B，能够精准识别图片、梗图及表情包内容。
+  - **表情包缓存**：通过图片哈希（MD5）匹配，识别过的表情包将秒回缓存结果，极大节省 API 开销。
+  - **主动斗图**：AI 会根据语境主动选择合适的表情包标签，系统自动从库中匹配并发送。
+
+- 🎭 **人设高度可定制**：
+  - 身份设定与核心代码完全解耦。
+  - 只需修改 `config.yaml`，即可将机器人从“二次元少女”转变为任何你想要的角色。
+
+- 🛡️ **群组管理**：
+  - 完善的白名单/黑名单过滤机制，精确控制机器人的活动范围。
+
+## 📁 项目结构
 
 ```
 tingfengbot/
 ├── src/
-│   ├── aimodel/          # AI 模型相关模块
-│   │   ├── decision/     # 决策模块
-│   │   ├── image_processing/ # 图像处理模块
-│   │   ├── memory/       # 记忆模块
-│   │   └── reply/        # 回复生成模块
-│   ├── config/           # 配置文件
-│   ├── plugins/          # 插件目录
-│   └── utils/            # 工具函数
-├── bot.py               # 主程序入口
-├── requirements.txt     # Python 依赖
-├── .env.example        # 环境变量示例
-└── README.md           # 项目说明
+│   ├── aimodel/
+│   │   ├── decision/      # 智能决策逻辑 (Reasoner/LLM)
+│   │   ├── image_processing/ # VLM 图像识别与处理
+│   │   ├── memory/        # 向量库、记忆固化与 Embedding
+│   │   └── reply/         # 核心回复生成逻辑
+│   ├── config/            # 机器人与 AI 模型配置解析
+│   ├── plugins/           # NoneBot 插件 (业务核心)
+│   └── utils/             # 数据库管理 (SQLite) 与消息清洗
+├── data/                  # 数据库与向量库存储 (Git 忽略)
+├── scripts/               # 数据库迁移、功能测试等实用脚本
+├── bot.py                 # 程序入口
+└── config.yaml            # 机器人行为配置
 ```
 
-## 快速开始
+## 🚀 快速开始
 
-### 环境要求
-
-- Python 3.8+
-- pip 20.0+
-
-### 安装步骤
-
-1. 克隆项目到本地：
-```bash
-git clone <repository-url>
-cd tingfengbot
-```
-
-2. 创建虚拟环境并激活：
+### 1. 安装环境
 ```bash
 python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# Linux/Mac
-source .venv/bin/activate
-```
-
-3. 安装依赖：
-```bash
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-4. 配置环境变量：
+### 2. 配置文件
+- 复制 `ai_config.yaml.example` -> `ai_config.yaml`：配置你的 OpenAI/SiliconFlow API Key。
+- 复制 `config.yaml.example` -> `config.yaml`：设置机器人名字、人设及白名单群号。
+- 复制 `.env.example` -> `.env`：配置 NoneBot 运行环境及 WebSocket 地址。
+
+### 3. 初始化数据库
+第一次运行前，建议运行迁移脚本确保数据库结构最新：
 ```bash
-cp .env.example .env
-# 编辑 .env 文件，根据实际情况修改配置
+python scripts/migrate_db.py
 ```
 
-5. 配置 AI 模型（可选）：
-    - 复制 `ai_config.yaml.example` 到 `ai_config.yaml` 并配置 API 密钥
-    - 复制 `config.yaml.example` 到 `config.yaml` 并调整参数
-
-### 运行机器人
-
+### 4. 启动
 ```bash
 python bot.py
 ```
 
-## 配置说明
+## 🛠️ 技术栈
+- **框架**: NoneBot2 / OneBot V11
+- **AI 接口**: OpenAI SDK (兼容 DeepSeek, SiliconFlow 等)
+- **数据库**: SQLite (关系型) / ChromaDB (向量型)
+- **视觉**: PIL / Qwen2-VL
 
-### 环境变量 (.env)
-
-| 变量名 | 说明 | 默认值 |
-|--------|------|--------|
-| DRIVER | 驱动类型 | ~websockets |
-| HOST | 监听主机 | 127.0.0.1 |
-| PORT | 监听端口 | 8080 |
-| LOG_LEVEL | 日志级别 | DEBUG |
-| ONEBOT_WS_URLS | OneBot WebSocket 地址 | ["ws://192.168.8.240:3001"] |
-
-### 配置文件
-
-- `ai_config.yaml`: AI 模型相关配置（API 密钥、模型参数等）
-- `config.yaml`: 机器人行为配置（触发词、回复策略等）
-
-**注意**：包含敏感信息的配置文件已被添加到 `.gitignore`，请勿提交到版本控制。
-
-## 插件开发
-
-在 `src/plugins/` 目录下创建新的 Python 文件即可开发插件。参考 `group_handler.py` 的写法。
-
-插件基本结构：
-```python
-from nonebot import on_command
-from nonebot.adapters.onebot.v11 import GroupMessageEvent
-
-my_command = on_command("test")
-
-@my_command.handle()
-async def handle_test(event: GroupMessageEvent):
-    await my_command.finish("Hello, World!")
-```
-
-## 贡献指南
-
-1. Fork 本仓库
-2. 创建功能分支 (`git checkout -b feature/amazing-feature`)
-3. 提交更改 (`git commit -m 'Add some amazing feature'`)
-4. 推送到分支 (`git push origin feature/amazing-feature`)
-5. 开启 Pull Request
-
-## 许可证
-
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
-
-## 支持与联系
-
-如有问题或建议，请提交 Issue 或通过其他方式联系维护者。
+## ⚠️ 注意事项
+- 本项目默认不响应私聊消息。
+- 请确保你的 API Key 余额充足，建议使用硅基流动等高性价比平台。
+- 包含密钥的 `*.yaml` 和 `data/` 目录已被加入 `.gitignore`，请放心开发。

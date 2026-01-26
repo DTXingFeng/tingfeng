@@ -53,6 +53,17 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
     message = event.get_message()
     cleaned_parts = []
 
+    # 如果是艾特机器人，确保文本开头有 @self (NoneBot 可能会在 get_message 中移除艾特段)
+    if event.is_tome():
+        # 检查是否已经有 @self 了，避免重复
+        has_at_self = False
+        for seg in message:
+            if seg.type == "at" and (str(seg.data.get("qq")) == str(bot.self_id) or str(seg.data.get("qq")) == bot_config.bot_qq):
+                has_at_self = True
+                break
+        if not has_at_self:
+            cleaned_parts.append("@self")
+
     for seg in message:
         if seg.type == "text":
             text = seg.data.get("text", "").strip()
@@ -80,8 +91,11 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
         
         elif seg.type == "image":
             url = seg.data.get("url")
+            # 这里的 sub_type=1 通常代表表情包
+            is_sticker = str(seg.data.get("sub_type", "0")) == "1"
+            
             if vlm_func and url:
-                description = await vlm_func(url)
+                description = await vlm_func(url, is_sticker=is_sticker)
                 cleaned_parts.append(f"[图片内容: {description}]")
             else:
                 cleaned_parts.append("[图片]")
