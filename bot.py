@@ -3,6 +3,22 @@ from nonebot.adapters.onebot.v11 import Adapter as ONEBOT_V11_Adapter
 from nonebot.message import event_preprocessor
 from nonebot.exception import IgnoredException
 from nonebot.adapters.onebot.v11 import MessageEvent, GroupMessageEvent
+import os
+from pathlib import Path
+import shutil
+
+# 启动前检查：确保必要文件存在
+def check_essential_files():
+    # 检查 .env
+    if not os.path.exists(".env") and os.path.exists(".env.example"):
+        print("Creating .env from .env.example...")
+        shutil.copy(".env.example", ".env")
+    
+    # 检查 data 目录
+    Path("data").mkdir(parents=True, exist_ok=True)
+
+# 执行检查
+check_essential_files()
 
 # 初始化 NoneBot
 nonebot.init()

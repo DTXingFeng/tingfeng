@@ -40,20 +40,39 @@ class AIConfigManager:
             # Create default config if not exists
             default_config = AIConfig(
                 platforms={
-                    "deepseek_official": PlatformConfig(
-                        base_url="https://api.deepseek.com/v1",
+                    "siliconflow": PlatformConfig(
+                        base_url="https://api.siliconflow.cn/v1",
                         api_key="sk-xxxxxx",
-                        description="DeepSeek 官方 API"
+                        description="SiliconFlow API"
                     )
                 },
                 models={
-                    "ds_chat": ModelConfig(
-                        platform_alias="deepseek_official",
-                        model_name="deepseek-chat",
-                        description="DeepSeek 官方对话模型"
+                    "qwen_7b": ModelConfig(
+                        platform_alias="siliconflow",
+                        model_name="Qwen/Qwen2.5-7B-Instruct",
+                        description="Qwen 7B Instruct"
+                    ),
+                    "qwen_72b": ModelConfig(
+                        platform_alias="siliconflow",
+                        model_name="Qwen/Qwen2.5-72B-Instruct",
+                        description="Qwen 72B Instruct"
+                    ),
+                    "qwen_vl": ModelConfig(
+                        platform_alias="siliconflow",
+                        model_name="Qwen/Qwen2-VL-72B-Instruct",
+                        description="Qwen2-VL 72B"
+                    ),
+                    "bge_m3": ModelConfig(
+                        platform_alias="siliconflow",
+                        model_name="BAAI/bge-m3",
+                        description="BGE-M3 Embedding"
                     )
                 },
-                reply_model="ds_chat"
+                reply_model="qwen_72b",
+                decision_model="qwen_7b",
+                memory_model="bge_m3",
+                consolidation_model="qwen_7b",
+                image_model="qwen_vl"
             )
             cls.save_config(default_config)
             cls._config = default_config
