@@ -52,6 +52,7 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         "请直接输出 JSON 格式：\n"
         "{\n"
         "  \"should_reply\": boolean,\n"
+        "  \"reply_to_user\": \"指定回复对象的用户名（必须从上下文或当前消息发送者中选择）\",\n"
         "  \"mood_impact\": number (-10 到 10 之间的整数),\n"
         "  \"reason\": \"简短的理由\",\n"
         "  \"is_replying_to_bot\": boolean,\n"
@@ -78,14 +79,16 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         
         # 结果解析
         should_reply = decision.get('should_reply', False)
+        reply_to_user = decision.get('reply_to_user', user_name) # 默认回复当前消息发送者
         mood_impact = decision.get('mood_impact', 0)
         interest_score = decision.get('interest_score', 0)
         is_replying_to_bot = decision.get('is_replying_to_bot', False)
         
-        print(f"决策引擎: [回复:{should_reply}] [心情:{mood_impact:+} ] [理由:{decision.get('reason')}]")
+        print(f"决策引擎: [回复:{should_reply}] [对象:{reply_to_user}] [心情:{mood_impact:+} ] [理由:{decision.get('reason')}]")
         
         return {
             "should_reply": should_reply,
+            "reply_to_user": reply_to_user,
             "mood_impact": mood_impact,
             "interest_score": interest_score,
             "is_replying_to_bot": is_replying_to_bot

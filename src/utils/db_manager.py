@@ -14,9 +14,21 @@ class DBManager:
         return sqlite3.connect(self.db_path)
 
     def _init_db(self):
-        """初始化数据库表"""
+        """初始化数据库表结构"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            
+            # 创建用户ID映射表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_mapping (
+                    group_id INTEGER,
+                    user_name TEXT,
+                    user_id INTEGER,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, user_name)
+                )
+            ''')
+            
             # 创建聊天记录表
             # group_id: 群号
             # msg: 格式为 "名字:内容"
@@ -192,6 +204,30 @@ class DBManager:
             if row:
                 return {"description": row[0], "tag": row[1], "file_id": row[2]}
             return None
+
+    def update_user_id_map(self, group_id: int, user_name: str, user_id: int):
+        """更新用户名到 ID 的映射"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO user_mapping (group_id, user_name, user_id, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id, user_name) DO UPDATE SET
+                user_id = excluded.user_id,
+                updated_at = CURRENT_TIMESTAMP
+            ''', (group_id, user_name, user_id))
+            conn.commit()
+
+    def get_user_id_by_name(self, group_id: int, user_name: str) -> Optional[int]:
+        """根据用户名查找 ID"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT user_id FROM user_mapping WHERE group_id = ? AND user_name = ?",
+                (group_id, user_name)
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
 
     def save_sticker_cache(self, file_hash: str, description: str, tag: str, file_id: str = None):
         """保存表情包缓存"""

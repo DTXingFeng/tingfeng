@@ -66,6 +66,13 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
     if bot_config.enable_mood and mood_desc:
         system_prompt += f"\n\n### 当前心情状态：\n你现在的心情是：{mood_desc}。请在回复时严格遵守当前的心情状态，调整你的语气、措辞和回复长度。"
         
+    # 艾特与引用功能引导
+    system_prompt += (
+        "\n\n### 互动功能指南：\n"
+        "1. **艾特他人**：如果你想在回复中艾特某人，请使用格式 `[at:用户名]`。系统会自动将其转换为实际的艾特。例如：'不准欺负 [at:刑风] 喔！'\n"
+        "2. **引用消息**：如果你想引用/回复当前这条消息，请在回复文本中包含 `[回复]` 标签。建议在针对性回答某个问题时使用。"
+    )
+
     # 引导 AI 使用表情包
     system_prompt += (
         "\n\n### 表情包使用指南：\n"
@@ -137,7 +144,7 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
         # 无论是否找到对应表情，都从文本中移除标签
         reply_content = re.sub(r'\[\s*表情\s*[:：].*?\]', '', reply_content).strip()
 
-        # 移除可能的 "self:" 或 "听风:" 前缀（如果 AI 自动带上的话）
+        # 移除可能的 "self:" 或 "听风:" 前缀
         if reply_content.startswith("self:"):
             reply_content = reply_content[5:].strip()
         elif reply_content.startswith(f"{bot_config.bot_name}:"):
