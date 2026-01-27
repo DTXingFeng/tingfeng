@@ -153,7 +153,10 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     db_manager.add_chat_log(group_id, msg_to_store)
     
     # 更新用户名与 ID 的映射，用于后续艾特功能
-    db_manager.update_user_id_map(group_id, display_name, user_id)
+    # 同时存储群名片和 QQ 昵称，增加匹配成功率
+    db_manager.update_user_id_map(group_id, nickname, user_id)
+    if sender.card and sender.card != nickname:
+        db_manager.update_user_id_map(group_id, sender.card, user_id)
     
     # 同步写入向量数据库 (长期记忆)
     # 使用 create_task 异步处理，不影响当前响应速度
@@ -208,6 +211,8 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         
         # 执行决策评估心情
         decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=True)
+        
+        # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
         mood_impact = decision.get("mood_impact", 0)
         if mood_impact != 0:
             db_manager.update_mood(group_id, mood_impact)
@@ -228,14 +233,13 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                 
                 decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=False)
                 
+                # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
+                mood_impact = decision.get("mood_impact", 0)
+                if mood_impact != 0:
+                    db_manager.update_mood(group_id, mood_impact)
+                
                 do_reply = decision.get("should_reply", False)
                 target_user = decision.get("reply_to_user", display_name)
-                
-                # 更新心情 (仅在决定回复时更新)
-                if do_reply:
-                    mood_impact = decision.get("mood_impact", 0)
-                    if mood_impact != 0:
-                        db_manager.update_mood(group_id, mood_impact)
             else:
                 # 没通过随机概率，标记为“待处理”，等到下个周期可能补发
                 pending_decisions[group_id] = True
@@ -331,8 +335,10 @@ async def process_my_logic(
                             target_id = db_manager.get_user_id_by_name(group_id, target_name)
                             if target_id:
                                 msg_segments.append(MessageSegment.at(target_id))
+                                print(f"  - 成功转换艾特: {target_name} -> {target_id}")
                             else:
                                 msg_segments.append(MessageSegment.text(f"@{target_name}"))
+                                print(f"  - 艾特转换失败 (未找到ID): {target_name}")
                         elif part:
                             msg_segments.append(MessageSegment.text(part))
                     
@@ -356,8 +362,10 @@ async def process_my_logic(
                         target_id = db_manager.get_user_id_by_name(group_id, target_name)
                         if target_id:
                             msg_segments.append(MessageSegment.at(target_id))
+                            print(f"  - 成功转换艾特: {target_name} -> {target_id}")
                         else:
                             msg_segments.append(MessageSegment.text(f"@{target_name}"))
+                            print(f"  - 艾特转换失败 (未找到ID): {target_name}")
                     elif part:
                         msg_segments.append(MessageSegment.text(part))
                 

@@ -10,18 +10,18 @@ import re
 
 def get_mood_description(mood_value: int) -> str:
     """将数值心情映射为文字描述"""
-    if mood_value <= 15:
-        return "极度愤怒/破防 (现在你像是个战斗力爆表的贴吧老哥。对于辱骂、挑衅或恶意，你要毫不留情地犀利回击，使用冷嘲热讽、抽象话或极具攻击性的语言，不再维持任何礼貌设定。)"
-    elif mood_value <= 30:
-        return "非常低落/反感 (说话非常简短、冷漠，带有一种‘别来烦我’的疏离感，对讨厌的人会直接开怼。)"
-    elif mood_value <= 45:
-        return "有些忧郁或委屈 (语气低沉、兴致不高，话比较少，表现得比较消极。)"
+    if mood_value <= 10:
+        return "彻底破防 (你受到了极大的侮辱，现在你完全化身为犀利的贴吧老哥。对于恶意攻击者，你要毫不留情地反击，使用最辛辣的讽刺。)"
+    elif mood_value <= 25:
+        return "极度不悦 (你现在心情很糟，说话带刺，容易产生误会，对人比较冷淡。)"
+    elif mood_value <= 40:
+        return "有些忧郁 (语气低沉，兴致不高，不太想说话。)"
     elif mood_value <= 60:
-        return "平静自然 (正常的交流风格，随性、自然，偶尔吐槽。)"
+        return "平静自然 (正常的交流风格，随性、自然。)"
     elif mood_value <= 80:
-        return "开心活泼 (语气轻快，表现得比较主动，愿意分享。)"
+        return "开心活泼 (心情不错，愿意和大家分享趣事。)"
     else:
-        return "兴奋狂喜 (非常热情，充满了元气，喜欢互动，话会变多。)"
+        return "兴奋狂喜 (非常热情，充满了元气。)"
 
 async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dict[str, any]:
     """
@@ -37,6 +37,15 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
     # 2. 准备历史记录
     # 获取最近 20 条记录作为短期记忆
     history = db_manager.get_chat_log(group_id, limit=20)
+    
+    # 提取历史记录中的所有参与者名字，用于艾特功能
+    participants = set()
+    for entry in history:
+        if ":" in entry:
+            name = entry.split(":")[0]
+            if name != "self" and name != bot_config.bot_name:
+                participants.add(name)
+    participants_str = "、".join(list(participants)) if participants else "暂无其他参与者"
     
     # 获取心情值
     mood_desc = ""
@@ -66,11 +75,17 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
     if bot_config.enable_mood and mood_desc:
         system_prompt += f"\n\n### 当前心情状态：\n你现在的心情是：{mood_desc}。请在回复时严格遵守当前的心情状态，调整你的语气、措辞和回复长度。"
         
-    # 艾特与引用功能引导
+    # 艾特与引用功能指南（请务必遵守）：
     system_prompt += (
-        "\n\n### 互动功能指南：\n"
-        "1. **艾特他人**：如果你想在回复中艾特某人，请使用格式 `[at:用户名]`。系统会自动将其转换为实际的艾特。例如：'不准欺负 [at:刑风] 喔！'\n"
-        "2. **引用消息**：如果你想引用/回复当前这条消息，请在回复文本中包含 `[回复]` 标签。建议在针对性回答某个问题时使用。"
+        "\n\n### 互动功能指南（请务必遵守）：\n"
+        "1. **艾特他人 (Mentions)**：\n"
+        f"   - 当前群聊活跃用户有：{participants_str}\n"
+        "   - 如果你想在回复中艾特某人，**必须**使用格式 `[at:用户名]`（例如 `[at:刑风]`）。\n"
+        "   - **绝对禁止**直接输出 `@用户名` 或 `@用户ID`，这种纯文本格式无法触发系统通知。\n"
+        "2. **引用消息 (Reply/Quote)**：\n"
+        "   - 如果你是在针对性地回答某个人的问题，或者是在承接上文，**必须**在回复的最开头加上 `[回复]` 标签。\n"
+        "   - 示例：`[回复] 听到了哦，你刚才说的事我记住了。`\n"
+        "   - 只有带上这个标签，你的回复才会以‘引用/回复’的形式发出，否则就是普通的发言。\n"
     )
 
     # 引导 AI 使用表情包
