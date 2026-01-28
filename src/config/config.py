@@ -6,6 +6,8 @@ from typing import Optional, List
 class BotConfig(BaseModel):
     bot_name: str = "听风"
     bot_qq: str = "391459725"
+    creator_id: Optional[int] = None # 创造者的 QQ 号
+    creator_name: str = "刑风" # 创造者的名字
     identity: str = "你是一个性格温和、有些害羞的二次元少女，名字叫听风。你喜欢和大家聊天，但说话比较委婉。"
     prompt: str = "请以听风的身份进行回复。保持角色设定，不要提及你是AI。"
     reply_rate: float = 0.0  # 默认 0.0，强制艾特才回复

@@ -23,10 +23,10 @@ FACE_MAP = {
     "13": "呲牙",
 }
 
-def split_text_to_segments(text: str, max_len: int = 100) -> List[str]:
+def split_text_to_segments(text: str, max_len: int = 30) -> List[str]:
     """
     将文本拆分为多个自然段落，用于分段发送。
-    优先按换行符拆分，其次按句末标点拆分。
+    优先按换行符拆分，其次按句末标点拆分，最后按长度拆分。
     """
     if not text:
         return []
@@ -40,20 +40,25 @@ def split_text_to_segments(text: str, max_len: int = 100) -> List[str]:
             segments.append(line)
         else:
             # 2. 如果一行太长，按句末标点拆分
-            # 匹配 。！？! ? ... 以及这些标点后可能跟着的右括号/引号
-            sub_parts = re.split(r'([。！？!?\n]+|[\.]{3,})', line)
+            # 匹配 。！？! ? ... 以及空格，模拟群聊断句
+            sub_parts = re.split(r'([。！？!?\s]+|[\.]{3,})', line)
             
             current_seg = ""
             for i in range(0, len(sub_parts), 2):
                 part = sub_parts[i]
                 punc = sub_parts[i+1] if i+1 < len(sub_parts) else ""
                 
-                if len(current_seg) + len(part) + len(punc) <= max_len:
-                    current_seg += part + punc
-                else:
-                    if current_seg:
-                        segments.append(current_seg.strip())
+                # 如果当前段加上新部分超过长度，先存入当前段
+                if current_seg and len(current_seg) + len(part) + len(punc) > max_len:
+                    segments.append(current_seg.strip())
                     current_seg = part + punc
+                else:
+                    current_seg += part + punc
+                
+                # 如果单部分就已经超长了，强制截断（虽然群聊很少见，但做个保底）
+                while len(current_seg) > max_len:
+                    segments.append(current_seg[:max_len].strip())
+                    current_seg = current_seg[max_len:]
             
             if current_seg:
                 segments.append(current_seg.strip())

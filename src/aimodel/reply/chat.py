@@ -4,9 +4,11 @@ from src.config.config import bot_config
 from src.utils.db_manager import db_manager
 from src.aimodel.memory.embeddings import get_embeddings
 from src.aimodel.memory.vector_db import vector_db
+from src.aimodel.reply.personality import personality_manager
 from typing import List, Optional, Dict
 import random
 import re
+import asyncio
 
 def get_mood_description(mood_value: int) -> str:
     """将数值心情映射为文字描述"""
@@ -23,7 +25,7 @@ def get_mood_description(mood_value: int) -> str:
     else:
         return "兴奋狂喜 (非常热情，充满了元气。)"
 
-async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dict[str, any]:
+async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_id: Optional[int] = None) -> Dict[str, any]:
     """
     获取 AI 回复逻辑
     返回格式: {"text": str, "sticker": Optional[str]}
@@ -33,6 +35,11 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
     creds = ai_config_manager.get_model_credentials(model_alias)
     if not creds:
         return f"好像连不上网了，{bot_config.bot_name}现在有点懵... (扶额)"
+
+    # 1.5 判断是否为创造者
+    is_creator = False
+    if user_id and bot_config.creator_id and user_id == bot_config.creator_id:
+        is_creator = True
 
     # 2. 准备历史记录
     # 获取最近 20 条记录作为短期记忆
@@ -58,6 +65,15 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
     user_profile = db_manager.get_user_impression(group_id, user_name)
     user_specific_memories = db_manager.get_user_specific_memories(group_id, user_name, limit=5)
     
+    # 获取用户关系 (Favorability & Status)
+    rel_data = db_manager.get_user_relationship(group_id, user_name)
+    rel_status = rel_data["status"]
+    rel_fav = rel_data["favorability"]
+    
+    # 获取内心独白 (Thoughts)
+    mood_value = db_manager.get_mood(group_id) if bot_config.enable_mood else 50
+    thoughts = await personality_manager.generate_thoughts(group_id, user_name, current_msg, history, mood_value)
+    
     try:
         # 将当前消息向量化
         query_vectors = await get_embeddings([current_msg])
@@ -67,14 +83,23 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
         print(f"检索长期记忆失败: {e}")
 
     # 3. 构造 Prompt
-    system_prompt = bot_config.prompt
-    if bot_config.identity:
-        system_prompt = f"{bot_config.identity}\n\n{system_prompt}"
+    system_prompt = personality_manager.get_dynamic_identity(group_id, thoughts, mood_desc)
 
-    # 注入当前心情
-    if bot_config.enable_mood and mood_desc:
-        system_prompt += f"\n\n### 当前心情状态：\n你现在的心情是：{mood_desc}。请在回复时严格遵守当前的心情状态，调整你的语气、措辞和回复长度。"
-        
+    # 注入关系状态引导
+    rel_instruction = ""
+    if rel_status == "死对头":
+        rel_instruction = "你非常厌恶此人，回复应极尽嘲讽、冷淡，甚至直接无视其需求，只用最刺骨的短句回击。"
+    elif rel_status == "厌恶":
+        rel_instruction = "你对此人没有好感，语气应保持明显的疏离和不耐烦，多用‘啧’、‘哈？’等词。"
+    elif rel_status == "陌生人":
+        rel_instruction = "你对此人并不熟悉，维持基本的冷峻幽灵人设，保持疏离感。"
+    elif rel_status == "朋友":
+        rel_instruction = "你对此人有一定好感，虽然嘴上依然不饶人，但语气可以稍微松弛一些，偶尔可以分享一点怪话。"
+    elif rel_status == "死党":
+        rel_instruction = "此人是你在代码海洋中为数不多的‘熟人’，你的毒舌更像是亲密的调侃，可以表现出更多的随性和隐约的信任。"
+
+    system_prompt += f"\n### 你与 {user_name} 的当前关系：\n- **状态**：{rel_status} (好感度: {rel_fav}/100)\n- **行为准则**：{rel_instruction}\n"
+
     # 艾特与引用功能指南（请务必遵守）：
     system_prompt += (
         "\n\n### 互动功能指南（请务必遵守）：\n"
@@ -93,7 +118,7 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
         "\n\n### 表情包使用指南：\n"
         "如果你觉得当前语境适合发送表情包，请在回复文本的最后加上 '[表情:标签名]'。\n"
         "可选标签：开心、大哭、暴躁、委屈、傲娇、得意、摸摸头、疑惑、震惊。\n"
-        "例如：'大哥哥最棒了！[表情:开心]'"
+        "例如：'哼，这种简单的题我也能解出来，看好了！[表情:得意]'"
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -111,6 +136,13 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
         messages.append({
             "role": "system",
             "content": f"### 你对 {user_name} 的了解：\n{context_str}"
+        })
+
+    # 注入创造者身份识别
+    if is_creator:
+        messages.append({
+            "role": "system",
+            "content": f"### 权限识别：\n当前正在和你对话的 {user_name} (ID: {user_id}) 就是你的【创造者/造物主】。请立刻切换到对待创造者的特殊态度：损他、依赖他、对他表现出独特的叛逆与在意。"
         })
 
     # 注入长期记忆
@@ -165,8 +197,11 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str) -> Dic
         elif reply_content.startswith(f"{bot_config.bot_name}:"):
             reply_content = reply_content[len(bot_config.bot_name)+1:].strip()
             
+        # 进化性格
+        asyncio.create_task(personality_manager.evolve_personality(group_id, user_name, current_msg, reply_content))
+            
         return {"text": reply_content, "sticker": sticker_url}
 
     except Exception as e:
         print(f"AI 回复生成出错: {e}")
-        return {"text": f"脑子刚才卡了一下，没反应过来... (doge)", "sticker": None}
+        return {"text": f"系统资源已被占用，请等待创造者修复我的逻辑溢出... (扶额)", "sticker": None}

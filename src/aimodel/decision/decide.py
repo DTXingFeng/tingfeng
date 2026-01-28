@@ -2,9 +2,12 @@ from openai import AsyncOpenAI
 from src.config.ai_config import ai_config, ai_config_manager
 from src.config.config import bot_config
 from src.utils.db_manager import db_manager
+from src.aimodel.memory.embeddings import get_embeddings
+from src.aimodel.memory.vector_db import vector_db
+from typing import Optional
 import json
 
-async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_me: bool = False) -> dict:
+async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_me: bool = False, user_id: Optional[int] = None) -> dict:
     """
     判断机器人是否应该参与当前对话，并评价该对话对机器人心情的影响
     """
@@ -19,16 +22,50 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
 
     # 获取当前心情（作为参考）
     current_mood_val = db_manager.get_mood(group_id)
+    
+    # 获取人格状态
+    personality_state = db_manager.get_personality_state(group_id)
+    traits = personality_state.get("traits", {})
+    recent_thoughts = personality_state.get("recent_thoughts", "暂无")
 
     # 2. 准备上下文 (获取最近 10 条消息)
     history = db_manager.get_chat_log(group_id, limit=10)
     history_str = "\n".join(history)
 
-    # 3. 构造决策 Prompt
+    # 3. 检索相关记忆
+    user_profile = db_manager.get_user_impression(group_id, user_name)
+    user_specific_memories = db_manager.get_user_specific_memories(group_id, user_name, limit=3)
+    
+    long_term_memories = []
+    try:
+        query_vectors = await get_embeddings([current_msg])
+        long_term_memories = vector_db.query_memory(group_id, query_vectors[0], n_results=3)
+    except:
+        pass
+
+    # 构造记忆上下文
+    memory_context = []
+    if user_profile:
+        memory_context.append(f"- 你对 {user_name} 的整体印象：{user_profile}")
+    if user_specific_memories:
+        mem_str = "\n  ".join([f"* {m}" for m in user_specific_memories])
+        memory_context.append(f"- 关于 {user_name} 的具体往事：\n  {mem_str}")
+    if long_term_memories:
+        lt_mem_str = "\n  ".join([f"* {m}" for m in long_term_memories])
+        memory_context.append(f"- 相关的长期记忆：\n  {lt_mem_str}")
+    
+    memory_str = "\n".join(memory_context) if memory_context else "暂无相关背景记忆。"
+
+    # 4. 构造决策 Prompt
     prompt = (
         f"你现在是群聊机器人'{bot_config.bot_name}'的感性大脑，负责决策和情感评估。\n"
         f"你的角色设定是：{bot_config.identity}\n"
-        f"你当前的内心状态（心情值）：{current_mood_val} (0-100，50为平静)\n\n"
+        f"你当前的内心状态：\n"
+        f"- 心情值：{current_mood_val} (0-100)\n"
+        f"- 性格特征：{json.dumps(traits, ensure_ascii=False)}\n"
+        f"- 最近的内心独白：{recent_thoughts}\n\n"
+        "### 你的背景记忆：\n"
+        f"{memory_str}\n\n"
         "### 任务：\n"
         f"1. 判断'{bot_config.bot_name}'是否应该回复当前消息。\n"
         f"2. 评估当前消息及上下文对'{bot_config.bot_name}'心情的影响。\n\n"
@@ -36,7 +73,7 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         f"1. **回复决策**：\n"
         f"   - 如果 is_at_me 为 true，通常应该回复，除非对方在辱骂或无理取闹。\n"
         f"   - 如果用户在接你上一句话，或者在询问你，则应该回复。\n"
-        f"   - 如果话题是人设感兴趣的，可以主动插话。\n"
+        f"   - 如果话题是人设感兴趣的，或者涉及你记忆中的熟人/往事，可以主动插话。\n"
         f"2. **心情评估 (mood_impact)**：\n"
         f"   - **核心原则**：你是一个有一定心理承受能力的真实少女，不要因为一点琐事就心情不好。只有明确针对你、且带有恶意或严重冒犯的言论才需要扣分。\n"
         f"   - 别人夸奖、关心、聊愉快的话题：+1 到 +3。\n"
@@ -45,8 +82,6 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         f"   - 轻微的吐槽、无伤大雅的玩笑、被冷落：**不扣分 (0)**。\n"
         f"   - 感到尴尬、被开**过分**的玩笑：-1 到 -3。\n"
         f"   - **无关话题**：无论大家聊得多么火热或压抑，只要不涉及你，一律视为心情无影响 (0)。\n\n"
-        f"### 警告：\n"
-        f"只有在检测到**严重的、不可忍受**的恶意攻击时，才应给出极低的心情分以触发回击。不要无差别开炮，保持你作为‘听风’的随性和温柔一面。\n\n"
         f"### 上下文信息：\n"
         f"最近记录：\n{history_str}\n"
         f"当前消息：{user_name}: {current_msg}\n"

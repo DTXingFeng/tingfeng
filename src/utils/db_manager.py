@@ -1,5 +1,6 @@
 import sqlite3
 import datetime
+import json
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict
 
@@ -90,6 +91,45 @@ class DBManager:
                     group_id INTEGER PRIMARY KEY,
                     mood_value INTEGER DEFAULT 50,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            # 创建人格状态表
+            # group_id: 群号
+            # traits: JSON 格式的人格特征值
+            # thoughts: 最近的一次内心独白
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bot_personality (
+                    group_id INTEGER PRIMARY KEY,
+                    traits TEXT,
+                    recent_thoughts TEXT,
+                    style_vibe TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            # 创建用户关系表
+            # favorability: 好感度 (0-100, 默认 50)
+            # status: 关系状态 (如：陌生人、熟人、朋友、死党、死对头)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_relationships (
+                    group_id INTEGER,
+                    user_name TEXT,
+                    favorability INTEGER DEFAULT 50,
+                    status TEXT DEFAULT '陌生人',
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, user_name)
+                )
+            ''')
+            # 创建作息表
+            # group_id: 群号
+            # schedule_json: 存储作息时间段的 JSON 字符串
+            # date: 日期 (YYYY-MM-DD)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS bot_schedules (
+                    group_id INTEGER,
+                    date TEXT,
+                    schedule_json TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, date)
                 )
             ''')
             conn.commit()
@@ -286,6 +326,118 @@ class DBManager:
             ''', (new_mood, group_id))
             conn.commit()
         return new_mood
+
+    def get_personality_state(self, group_id: int) -> Dict[str, any]:
+        """获取人格状态"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT traits, recent_thoughts, style_vibe FROM bot_personality WHERE group_id = ?",
+                (group_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "traits": json.loads(row[0]) if row[0] else {},
+                    "recent_thoughts": row[1],
+                    "style_vibe": row[2]
+                }
+            return {"traits": {}, "recent_thoughts": "", "style_vibe": ""}
+
+    def get_all_groups(self) -> List[int]:
+        """获取所有已激活人格状态的群组 ID"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT group_id FROM bot_personality")
+            return [row[0] for row in cursor.fetchall()]
+
+    def update_personality_state(self, group_id: int, traits: Dict = None, thoughts: str = None, vibe: str = None):
+        """更新人格状态"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 先获取现有数据
+            state = self.get_personality_state(group_id)
+            
+            new_traits = json.dumps(traits if traits is not None else state["traits"])
+            new_thoughts = thoughts if thoughts is not None else state["recent_thoughts"]
+            new_vibe = vibe if vibe is not None else state["style_vibe"]
+            
+            cursor.execute('''
+                INSERT INTO bot_personality (group_id, traits, recent_thoughts, style_vibe, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id) DO UPDATE SET
+                traits = excluded.traits,
+                recent_thoughts = excluded.recent_thoughts,
+                style_vibe = excluded.style_vibe,
+                updated_at = CURRENT_TIMESTAMP
+            ''', (group_id, new_traits, new_thoughts, new_vibe))
+            conn.commit()
+
+    def get_user_relationship(self, group_id: int, user_name: str) -> Dict[str, any]:
+        """获取用户关系数据"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT favorability, status FROM user_relationships WHERE group_id = ? AND user_name = ?",
+                (group_id, user_name)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {"favorability": row[0], "status": row[1]}
+            return {"favorability": 50, "status": "陌生人"}
+
+    def update_user_relationship(self, group_id: int, user_name: str, delta_favorability: int = 0, new_status: str = None):
+        """更新用户好感度和关系状态"""
+        current = self.get_user_relationship(group_id, user_name)
+        new_fav = max(0, min(100, current["favorability"] + delta_favorability))
+        
+        # 自动根据好感度更新状态（如果未指定新状态）
+        if new_status is None:
+            if new_fav <= 10: new_status = "死对头"
+            elif new_fav <= 30: new_status = "厌恶"
+            elif new_fav <= 55: new_status = "陌生人"
+            elif new_fav <= 75: new_status = "朋友"
+            else: new_status = "死党"
+            
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO user_relationships (group_id, user_name, favorability, status, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id, user_name) DO UPDATE SET
+                favorability = excluded.favorability,
+                status = excluded.status,
+                updated_at = CURRENT_TIMESTAMP
+            ''', (group_id, user_name, new_fav, new_status))
+            conn.commit()
+        return {"favorability": new_fav, "status": new_status}
+
+    def get_bot_schedule(self, group_id: int, date_str: str) -> List[Dict]:
+        """获取指定日期的作息表"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT schedule_json FROM bot_schedules WHERE group_id = ? AND date = ?",
+                (group_id, date_str)
+            )
+            row = cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+            return []
+
+    def update_bot_schedule(self, group_id: int, date_str: str, schedule: List[Dict]):
+        """更新作息表"""
+        schedule_json = json.dumps(schedule, ensure_ascii=False)
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO bot_schedules (group_id, date, schedule_json, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id, date) DO UPDATE SET
+                schedule_json = excluded.schedule_json,
+                updated_at = CURRENT_TIMESTAMP
+            ''', (group_id, date_str, schedule_json))
+            conn.commit()
 
 # 全局单例
 db_manager = DBManager()

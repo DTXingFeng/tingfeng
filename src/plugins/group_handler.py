@@ -13,6 +13,38 @@ import random
 import asyncio
 import time
 import re
+import datetime
+
+# 记录每个群组最后一次被“强行唤醒”的时间（如被艾特或被提及）
+last_wake_up_times = {}
+
+def is_within_chat_time(group_id: int) -> bool:
+    """检查当前时间是否在作息表的‘水群’时间段内，或处于强行唤醒后的关注期内"""
+    now = datetime.datetime.now()
+    
+    # 1. 检查是否处于“强行唤醒”后的关注期（默认 5 分钟）
+    last_wake = last_wake_up_times.get(group_id, 0)
+    if time.time() - last_wake < 300: # 300秒 = 5分钟
+        return True
+
+    # 2. 检查作息表
+    today_str = now.strftime("%Y-%m-%d")
+    current_time_str = now.strftime("%H:%M")
+    
+    schedule = db_manager.get_bot_schedule(group_id, today_str)
+    
+    if not schedule:
+        return True
+        
+    for item in schedule:
+        start = item.get("start")
+        end = item.get("end")
+        can_chat = item.get("can_chat", False)
+        
+        if can_chat and start <= current_time_str <= end:
+            return True
+            
+    return False
 
 # 记录每个群最后一次进行 AI 决策的时间
 last_decision_times = {}
@@ -22,6 +54,8 @@ pending_decisions = {}
 group_contexts = {}
 # 记录正在运行的延迟决策任务
 active_deferred_tasks = {}
+# 记录每个群组是否正在进行 AI 决策，防止并发冲突
+deciding_groups = set()
 
 async def deferred_decision_worker(group_id: int, bot: Bot):
     """
@@ -35,23 +69,24 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
             
             if remaining <= 0:
                 # 冷却期已过，检查是否有待处理消息
-                if pending_decisions.get(group_id):
+                if pending_decisions.get(group_id) and group_id not in deciding_groups:
                     ctx = group_contexts.get(group_id)
                     if ctx:
-                        # 只有在随机概率通过时才执行（维持 reply_rate 的约束）
-                        if random.random() < bot_config.reply_rate:
-                            # 标记为已处理，防止重复触发
-                            pending_decisions[group_id] = False
+                        # 标记为已处理，防止重复触发
+                        pending_decisions[group_id] = False
+                        deciding_groups.add(group_id)
+                        
+                        try:
                             last_decision_times[group_id] = time.time()
-                            
                             # 执行决策
                             decision = await should_i_reply(
                                 group_id, 
                                 ctx['display_name'], 
                                 ctx['llm_text'], 
-                                is_at_me=False
+                                is_at_me=False,
+                                user_id=ctx['user_id']
                             )
-                            
+                                
                             # 更新心情
                             mood_impact = decision.get("mood_impact", 0)
                             if mood_impact != 0:
@@ -76,10 +111,14 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     role=ctx['role'],
                                     raw_msg=ctx['raw_msg']
                                 )
+                        finally:
+                            deciding_groups.remove(group_id)
                 break
             
             # 每隔一小段时间检查一次，或者直接睡完剩余时间
-            await asyncio.sleep(max(remaining, 1))
+            await asyncio.sleep(max(remaining, 0.5))
+    except asyncio.CancelledError:
+        pass
     except Exception as e:
         print(f"延迟决策任务出错: {e}")
     finally:
@@ -202,49 +241,63 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     
     if is_actively_engaged:
         # 1. 被显式叫到了，肯定要回
+        # 更新强行唤醒时间，进入 5 分钟关注期
+        last_wake_up_times[group_id] = time.time()
+        
         # 取消已存在的延迟决策任务，因为现在就要立刻处理
         if group_id in active_deferred_tasks:
             active_deferred_tasks[group_id].cancel()
         
         pending_decisions[group_id] = False
-        last_decision_times[group_id] = time.time()
         
-        # 执行决策评估心情
-        decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=True)
-        
-        # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
-        mood_impact = decision.get("mood_impact", 0)
-        if mood_impact != 0:
-            db_manager.update_mood(group_id, mood_impact)
-            
-        do_reply = True
-        target_user = decision.get("reply_to_user", display_name)
-    else:
-        # 2. 没被叫到，尝试进行 AI 智能决策
-        current_time = time.time()
-        last_time = last_decision_times.get(group_id, 0)
-        
-        if current_time - last_time >= bot_config.decision_interval:
-            # 过了冷却期，尝试随机触发
-            if random.random() < bot_config.reply_rate:
-                # 触发决策
-                last_decision_times[group_id] = current_time
-                pending_decisions[group_id] = False
-                
-                decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=False)
+        # 如果当前没有正在进行的决策，则立即执行
+        if group_id not in deciding_groups:
+            deciding_groups.add(group_id)
+            try:
+                last_decision_times[group_id] = time.time()
+                # 执行决策评估心情
+                decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=True, user_id=user_id)
                 
                 # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
                 mood_impact = decision.get("mood_impact", 0)
                 if mood_impact != 0:
                     db_manager.update_mood(group_id, mood_impact)
-                
-                do_reply = decision.get("should_reply", False)
+                    
+                do_reply = True
                 target_user = decision.get("reply_to_user", display_name)
-            else:
-                # 没通过随机概率，标记为“待处理”，等到下个周期可能补发
-                pending_decisions[group_id] = True
+            finally:
+                deciding_groups.remove(group_id)
+    else:
+        # 2. 没被叫到，尝试进行 AI 智能决策
+        # 首先检查当前是否在“作息表”允许的水群时间内
+        if not is_within_chat_time(group_id):
+            return # 不在水群时间，且没被叫到，直接忽略
+            
+        current_time = time.time()
+        last_time = last_decision_times.get(group_id, 0)
+        
+        if current_time - last_time >= bot_config.decision_interval:
+            # 过了冷却期，直接触发决策判断
+            # 确保当前没有正在进行的决策
+            if group_id not in deciding_groups:
+                deciding_groups.add(group_id)
+                try:
+                    last_decision_times[group_id] = current_time
+                    pending_decisions[group_id] = False
+                    
+                    decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=False, user_id=user_id)
+                    
+                    # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
+                    mood_impact = decision.get("mood_impact", 0)
+                    if mood_impact != 0:
+                        db_manager.update_mood(group_id, mood_impact)
+                    
+                    do_reply = decision.get("should_reply", False)
+                    target_user = decision.get("reply_to_user", display_name)
+                finally:
+                    deciding_groups.remove(group_id)
         else:
-            # 还在冷却期内，标记为“待处理”
+            # 还在冷却期内，只要有消息就标记为“待处理”，确保冷却结束后一定会判断
             pending_decisions[group_id] = True
             
             # 如果没有正在运行的延迟工人，则启动一个
@@ -296,7 +349,7 @@ async def process_my_logic(
     """
     # 1. 获取 AI 回复
     # 使用异步调用，不会阻塞其他消息的处理
-    reply_data = await get_chat_reply(group_id, card, llm_text)
+    reply_data = await get_chat_reply(group_id, card, llm_text, user_id=user_id)
     reply_text = reply_data.get("text")
     sticker_url = reply_data.get("sticker")
     
@@ -314,65 +367,38 @@ async def process_my_logic(
         
         # 4. 分段发送回复，模拟真人感
         if reply_text:
-            # 根据文本长度决定是否分段
-            if len(reply_text) > 40 or "\n" in reply_text:
-                segments = split_text_to_segments(reply_text)
-                for i, seg in enumerate(segments):
-                    # 构造消息段列表
-                    msg_segments = []
-                    
-                    # 只有第一段消息处理艾特和引用
-                    if i == 0:
-                        if is_reply:
-                            msg_segments.append(MessageSegment.reply(message_id))
-                    
-                    # 解析并处理 [at:用户名]
-                    # 我们按 [at:xxx] 拆分文本，交替加入 text 和 at 段
-                    parts = re.split(r'(\[at:.*?\])', seg)
-                    for part in parts:
-                        if part.startswith("[at:") and part.endswith("]"):
-                            target_name = part[4:-1].strip()
-                            target_id = db_manager.get_user_id_by_name(group_id, target_name)
-                            if target_id:
-                                msg_segments.append(MessageSegment.at(target_id))
-                                print(f"  - 成功转换艾特: {target_name} -> {target_id}")
-                            else:
-                                msg_segments.append(MessageSegment.text(f"@{target_name}"))
-                                print(f"  - 艾特转换失败 (未找到ID): {target_name}")
-                        elif part:
-                            msg_segments.append(MessageSegment.text(part))
-                    
-                    await bot.send(event, Message(msg_segments), at_sender=False)
-                    
-                    # 如果不是最后一段，或者后面还有表情包，就等一下
-                    if i < len(segments) - 1 or sticker_url:
-                        next_len = len(segments[i+1]) if i < len(segments) - 1 else 10
-                        delay = min(2.0, max(0.4, next_len * 0.05))
-                        await asyncio.sleep(delay + random.uniform(0.1, 0.4))
-            else:
-                # 短文本直接发
+            # 无论长短都尝试拆分，确保符合群聊短句习惯
+            segments = split_text_to_segments(reply_text)
+            for i, seg in enumerate(segments):
+                # 构造消息段列表
                 msg_segments = []
-                if is_reply:
-                    msg_segments.append(MessageSegment.reply(message_id))
                 
-                parts = re.split(r'(\[at:.*?\])', reply_text)
+                # 只有第一段消息处理艾特和引用
+                if i == 0:
+                    if is_reply:
+                        msg_segments.append(MessageSegment.reply(message_id))
+                
+                # 解析并处理 [at:用户名]
+                parts = re.split(r'(\[at:.*?\])', seg)
                 for part in parts:
                     if part.startswith("[at:") and part.endswith("]"):
                         target_name = part[4:-1].strip()
                         target_id = db_manager.get_user_id_by_name(group_id, target_name)
                         if target_id:
                             msg_segments.append(MessageSegment.at(target_id))
-                            print(f"  - 成功转换艾特: {target_name} -> {target_id}")
                         else:
                             msg_segments.append(MessageSegment.text(f"@{target_name}"))
-                            print(f"  - 艾特转换失败 (未找到ID): {target_name}")
                     elif part:
                         msg_segments.append(MessageSegment.text(part))
                 
-                await bot.send(event, Message(msg_segments), at_sender=False)
+                if msg_segments:
+                    await bot.send(event, Message(msg_segments), at_sender=False)
                 
-                if sticker_url:
-                    await asyncio.sleep(random.uniform(0.5, 1.2))
+                # 模拟打字间隔：如果后面还有消息段或表情包，则延迟
+                if i < len(segments) - 1 or sticker_url:
+                    # 基础延迟 + 随机抖动
+                    delay = min(1.5, max(0.3, len(seg) * 0.08))
+                    await asyncio.sleep(delay + random.uniform(0.1, 0.5))
         
         # 发送表情包
         if sticker_url:
