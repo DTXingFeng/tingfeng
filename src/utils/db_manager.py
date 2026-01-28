@@ -132,6 +132,52 @@ class DBManager:
                     PRIMARY KEY (group_id, date)
                 )
             ''')
+            
+            # 创建风格模仿表 (Mimicry)
+            # context: 发生的情境 (如: "被夸奖", "被骂", "讨论技术")
+            # style_desc: 对应的表达风格描述
+            # weight: 该风格的权重计数
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS style_patterns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER,
+                    context TEXT,
+                    style_desc TEXT,
+                    weight INTEGER DEFAULT 1,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(group_id, context, style_desc)
+                )
+            ''')
+            
+            # 创建黑话挖掘表 (Slang Mining)
+            # stage: 挖掘阶段 (1: 盲猜, 2: 境推, 3: 判定)
+            # context_samples: 出现的上下文样本 JSON
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS slang_candidates (
+                    group_id INTEGER,
+                    phrase TEXT,
+                    frequency INTEGER DEFAULT 1,
+                    stage INTEGER DEFAULT 1,
+                    definition TEXT,
+                    context_samples TEXT,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (group_id, phrase)
+                )
+            ''')
+            
+            # 创建知识图谱三元组表 (Knowledge Graph)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS knowledge_triplets (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    group_id INTEGER,
+                    subject TEXT,
+                    predicate TEXT,
+                    object TEXT,
+                    confidence REAL DEFAULT 1.0,
+                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(group_id, subject, predicate, object)
+                )
+            ''')
             conn.commit()
 
     def add_chat_log(self, group_id: int, msg: str):
@@ -438,6 +484,111 @@ class DBManager:
                 updated_at = CURRENT_TIMESTAMP
             ''', (group_id, date_str, schedule_json))
             conn.commit()
+
+    # --- 升级学习能力相关方法 ---
+
+    def add_style_pattern(self, group_id: int, context: str, style_desc: str):
+        """记录或更新风格模式"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO style_patterns (group_id, context, style_desc, weight, updated_at)
+                VALUES (?, ?, ?, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id, context, style_desc) DO UPDATE SET
+                weight = weight + 1,
+                updated_at = CURRENT_TIMESTAMP
+            ''', (group_id, context, style_desc))
+            conn.commit()
+
+    def get_style_patterns(self, group_id: int, limit: int = 20) -> List[Dict]:
+        """获取权重最高的风格模式"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT context, style_desc, weight FROM style_patterns WHERE group_id = ? ORDER BY weight DESC LIMIT ?",
+                (group_id, limit)
+            )
+            return [{"context": row[0], "style_desc": row[1], "weight": row[2]} for row in cursor.fetchall()]
+
+    def update_slang_candidate(self, group_id: int, phrase: str, delta_freq: int = 1, stage: int = None, definition: str = None, context_samples: List[str] = None):
+        """更新黑话候选词状态"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 获取现有数据
+            cursor.execute("SELECT frequency, stage, definition, context_samples FROM slang_candidates WHERE group_id = ? AND phrase = ?", (group_id, phrase))
+            row = cursor.fetchone()
+            
+            if row:
+                new_freq = row[0] + delta_freq
+                new_stage = stage if stage is not None else row[1]
+                new_def = definition if definition is not None else row[2]
+                
+                # 合并上下文样本
+                existing_samples = json.loads(row[3] or "[]")
+                if context_samples:
+                    existing_samples.extend(context_samples)
+                    existing_samples = list(set(existing_samples))[-10:] # 最多保留10个样本
+                new_samples = json.dumps(existing_samples, ensure_ascii=False)
+                
+                cursor.execute('''
+                    UPDATE slang_candidates SET 
+                    frequency = ?, stage = ?, definition = ?, context_samples = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE group_id = ? AND phrase = ?
+                ''', (new_freq, new_stage, new_def, new_samples, group_id, phrase))
+            else:
+                new_samples = json.dumps(context_samples or [], ensure_ascii=False)
+                cursor.execute('''
+                    INSERT INTO slang_candidates (group_id, phrase, frequency, stage, definition, context_samples)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', (group_id, phrase, delta_freq, stage or 1, definition, new_samples))
+            conn.commit()
+
+    def get_slang_candidates(self, group_id: int, min_freq: int = 0, stage: int = None) -> List[Dict]:
+        """获取黑话候选词"""
+        query = "SELECT phrase, frequency, stage, definition, context_samples FROM slang_candidates WHERE group_id = ? AND frequency >= ?"
+        params = [group_id, min_freq]
+        if stage is not None:
+            query += " AND stage = ?"
+            params.append(stage)
+            
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
+            return [{
+                "phrase": row[0], 
+                "frequency": row[1], 
+                "stage": row[2], 
+                "definition": row[3], 
+                "context_samples": json.loads(row[4] or "[]")
+            } for row in cursor.fetchall()]
+
+    def add_knowledge_triplet(self, group_id: int, subject: str, predicate: str, obj: str, confidence: float = 1.0):
+        """添加知识三元组"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO knowledge_triplets (group_id, subject, predicate, object, confidence, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id, subject, predicate, object) DO UPDATE SET
+                confidence = (confidence + excluded.confidence) / 2.0,
+                updated_at = CURRENT_TIMESTAMP
+            ''', (group_id, subject, predicate, obj, confidence))
+            conn.commit()
+
+    def get_knowledge_triplets(self, group_id: int, subject: str = None, limit: int = 50) -> List[Dict]:
+        """查询知识三元组"""
+        query = "SELECT subject, predicate, object, confidence FROM knowledge_triplets WHERE group_id = ?"
+        params = [group_id]
+        if subject:
+            query += " AND subject = ?"
+            params.append(subject)
+        query += " ORDER BY confidence DESC LIMIT ?"
+        params.append(limit)
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, tuple(params))
+            return [{"subject": row[0], "predicate": row[1], "object": row[2], "confidence": row[3]} for row in cursor.fetchall()]
 
 # 全局单例
 db_manager = DBManager()

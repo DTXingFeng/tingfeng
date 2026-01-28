@@ -1,4 +1,5 @@
 import json
+import random
 from typing import Dict, List, Optional
 from src.utils.db_manager import db_manager
 from src.config.config import bot_config
@@ -17,6 +18,18 @@ class PersonalityManager:
         "sensitivity": 70,   # 敏感度
         "curiosity": 50      # 好奇心
     }
+
+    DYNAMIC_STATES = [
+        {"name": "慵懒", "desc": "你现在感到有些疲惫，对什么都提不起劲，回复极其简短，甚至想直接打发对方。"},
+        {"name": "热情", "desc": "你现在思维活跃，对群聊内容很感兴趣，虽然嘴上依然不饶人，但发言频率和互动欲望明显增加。"},
+        {"name": "高冷", "desc": "你现在处于绝对理性的幽灵状态，语气冰冷且充满优越感，看人类就像在看低级程序。"},
+        {"name": "傲娇", "desc": "你现在心情有些微妙，明明在意却要表现出不在乎，说话口是心非，带有一点攻击性但并不致命。"},
+        {"name": "混乱", "desc": "你的逻辑核心出现轻微溢出，说话更加跳跃、无厘头，经常说一些让人摸不着头脑的怪话。"}
+    ]
+
+    def get_random_state(self) -> Dict[str, str]:
+        """随机抽取一种动态状态"""
+        return random.choice(self.DYNAMIC_STATES)
 
     @staticmethod
     def get_mood_color(mood_value: int) -> str:
@@ -79,9 +92,9 @@ class PersonalityManager:
             print(f"生成内心独白失败: {e}")
             return ""
 
-    def get_dynamic_identity(self, group_id: int, thoughts: str, mood_desc: str) -> str:
+    def get_dynamic_identity(self, group_id: int, thoughts: str, mood_desc: str, current_state: Dict[str, str] = None) -> str:
         """
-        根据内心独白和心情，动态调整系统提示词。
+        根据内心独白、心情和随机状态，动态调整系统提示词。
         """
         state = db_manager.get_personality_state(group_id)
         style_data = {}
@@ -97,15 +110,18 @@ class PersonalityManager:
         slang_str = "、".join(slang) if slang else "暂无"
         patterns_str = "、".join(patterns) if patterns else "暂无"
         
+        state_str = f"- **当前情绪状态**：{current_state['name']} ({current_state['desc']})" if current_state else ""
+
         dynamic_prompt = f"""
 {bot_config.prompt}
 
-### 此时此刻的你（动态状态）：
+### 此时此刻的你 (动态状态)：
 - **当前心情**：{mood_desc}
+{state_str}
 - **内心独白**（仅供参考，严禁在回复中直接输出）：{thoughts}
 - **群聊氛围感**：{vibe}
 
-### 本群语言特征（请参考）：
+### 本群语言特征 (请参考)：
 - **本群流行黑话/关键词**：{slang_str}
 - **本群常用口癖/句式**：{patterns_str}
 """
@@ -170,7 +186,177 @@ class PersonalityManager:
             print(f"生成每日作息表失败: {e}")
             return []
 
-    async def evolve_personality(self, group_id: int, user_name: str, user_msg: str, bot_reply: str):
+    async def capture_style_patterns(self, group_id: int, history: List[str]):
+        """
+        实时模仿机制：从最近的对话窗口中提取 (情境, 表达风格) 键值对。
+        """
+        if len(history) < 5:
+            return
+
+        model_alias = ai_config.reply_model
+        creds = ai_config_manager.get_model_credentials(model_alias)
+        if not creds:
+            return
+
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        
+        history_str = "\n".join(history[-20:]) # 采样最近 20 条
+        
+        mimicry_prompt = f"""
+你现在是 {bot_config.bot_name} 的风格捕捉模块。请分析以下群聊片段，识别其中用户表现出的独特表达风格。
+
+### 任务要求：
+1. 识别对话中的“特定情境”以及在该情境下用户展现出的“表达风格/语言模式”。
+2. 忽略通用的表达，寻找具有社群特色的、有趣的或高频出现的模式。
+3. 请输出 JSON 列表格式，每个对象包含 "context"（情境）和 "style"（风格描述）。
+
+### 示例输出：
+[
+  {{"context": "被夸奖", "style": "表现得极其害羞，使用‘捏’、‘的说’作为结尾"}},
+  {{"context": "讨论二次元", "style": "使用大量的抽象黑话，语气显得很‘赢’"}}
+]
+
+### 待分析对话：
+{history_str}
+"""
+        try:
+            response = await client.chat.completions.create(
+                model=creds["model"],
+                messages=[{"role": "system", "content": mimicry_prompt}],
+                max_tokens=500,
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            result = response.choices[0].message.content.strip()
+            data = json.loads(result)
+            patterns = data.get("patterns", data) if isinstance(data, dict) else data
+            
+            if isinstance(patterns, list):
+                for p in patterns:
+                    context = p.get("context")
+                    style = p.get("style")
+                    if context and style:
+                        db_manager.add_style_pattern(group_id, context, style)
+                        
+        except Exception as e:
+            print(f"风格捕捉失败: {e}")
+
+    async def mine_slang(self, group_id: int, history: List[str]):
+        """
+        语义演化机制：从对话中挖掘并演化群内黑话。
+        """
+        if len(history) < 5:
+            return
+
+        model_alias = ai_config.reply_model
+        creds = ai_config_manager.get_model_credentials(model_alias)
+        if not creds:
+            return
+
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        
+        history_str = "\n".join(history[-20:])
+        
+        mining_prompt = f"""
+你现在是 {bot_config.bot_name} 的黑话挖掘模块。请识别以下对话中出现的群内特有黑话、梗或高频特殊词汇。
+
+### 任务要求：
+1. 找出那些在普通语境下含义不明，但在该群聊中被频繁使用的词汇。
+2. 为每个词汇提供简短的初步定义（基于当前上下文的推测）。
+3. 请输出 JSON 列表格式。
+
+### 示例输出：
+[
+  {{"phrase": "爆金币", "definition": "指让某人出钱或付出代价"}},
+  {{"phrase": "依托构思", "definition": "谐音词，指某种写得很烂的东西"}}
+]
+
+### 待分析对话：
+{history_str}
+"""
+        try:
+            response = await client.chat.completions.create(
+                model=creds["model"],
+                messages=[{"role": "system", "content": mining_prompt}],
+                max_tokens=500,
+                temperature=0.3,
+                response_format={"type": "json_object"}
+            )
+            result = response.choices[0].message.content.strip()
+            data = json.loads(result)
+            slangs = data.get("slangs", data) if isinstance(data, dict) else data
+            
+            if isinstance(slangs, list):
+                for s in slangs:
+                    phrase = s.get("phrase")
+                    definition = s.get("definition")
+                    if phrase:
+                        # 记录并更新频率，同时附带当前上下文样本
+                        db_manager.update_slang_candidate(
+                            group_id, 
+                            phrase, 
+                            delta_freq=1, 
+                            definition=definition,
+                            context_samples=[history_str]
+                        )
+                        
+                        # 触发差分推理 (检查频率阈值)
+                        await self._refine_slang_definition(group_id, phrase)
+                        
+        except Exception as e:
+            print(f"黑话挖掘失败: {e}")
+
+    async def _refine_slang_definition(self, group_id: int, phrase: str):
+        """
+        多轮差分推理：根据积累的上下文样本，修正黑话定义。
+        """
+        candidates = db_manager.get_slang_candidates(group_id)
+        candidate = next((c for c in candidates if c["phrase"] == phrase), None)
+        if not candidate: return
+
+        freq = candidate["frequency"]
+        stage = candidate["stage"]
+        
+        # 判定是否需要升级阶段
+        new_stage = stage
+        if freq >= 60 and stage < 3: new_stage = 3
+        elif freq >= 10 and stage < 2: new_stage = 2
+        
+        if new_stage == stage: return # 阶段未改变，暂不重推
+
+        model_alias = ai_config.reply_model
+        creds = ai_config_manager.get_model_credentials(model_alias)
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        
+        samples_str = "\n---\n".join(candidate["context_samples"])
+        
+        refine_prompt = f"""
+你现在是 {bot_config.bot_name} 的黑话判定专家。
+我们需要对黑话词汇 "{phrase}" 进行深度定义。
+
+### 现有推测定义：
+{candidate["definition"]}
+
+### 收集到的真实上下文样本：
+{samples_str}
+
+### 任务：
+请根据以上真实样本，修正并固化该黑话的定义。要求精准、简练，并指出其背后的情感色彩或社群文化背景。
+直接输出最终定义，不要包含其他文字。
+"""
+        try:
+            response = await client.chat.completions.create(
+                model=creds["model"],
+                messages=[{"role": "system", "content": refine_prompt}],
+                max_tokens=200,
+                temperature=0.2
+            )
+            final_def = response.choices[0].message.content.strip()
+            db_manager.update_slang_candidate(group_id, phrase, delta_freq=0, stage=new_stage, definition=final_def)
+        except Exception as e:
+            print(f"黑话定义修正失败: {e}")
+
+    async def evolve_personality(self, group_id: int, user_name: str, user_msg: str, bot_reply: str = None):
         """
         根据交互进化性格特征值和用户关系。
         """

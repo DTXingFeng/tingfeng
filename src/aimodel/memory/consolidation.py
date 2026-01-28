@@ -54,7 +54,11 @@ async def consolidate_memories(group_id: int):
             "### 任务 3：提取用户专属往事 (User Stories)\n"
             "提取关于某个用户的特定、具体的关键事件或属性。\n"
             "格式：'STORY|用户名|事件描述'。\n\n"
-            "### 任务 4：情感共鸣评估 (Emotional Tone)\n"
+            "### 任务 4：提取知识三元组 (Knowledge Triplets)\n"
+            "提取具有客观价值或长期逻辑关联的结构化知识。\n"
+            "格式：'TRIPLET|主体|谓语|客体|置信度(0.1-1.0)'。\n"
+            "例如：'TRIPLET|刑风|正在研究|神经网络|0.9'，'TRIPLET|北京|又称|帝都|1.0'。\n\n"
+            "### 任务 5：情感共鸣评估 (Emotional Tone)\n"
             "评估这批聊天对你（听风）的情感冲击。你感到被重视了吗？还是被冷落了？\n"
             "格式：'EMO|数值' (-20 到 20)。\n\n"
             "如果没有值得记录的内容，请回复‘无’。\n\n"
@@ -87,6 +91,15 @@ async def consolidate_memories(group_id: int):
                 if len(parts) >= 3:
                     u_name, u_story = parts[1].strip(), parts[2].strip()
                     db_manager.add_user_specific_memory(group_id, u_name, u_story)
+            elif line.startswith("TRIPLET|"):
+                parts = line.split("|")
+                if len(parts) >= 5:
+                    sub, pred, obj = parts[1].strip(), parts[2].strip(), parts[3].strip()
+                    try:
+                        conf = float(parts[4].strip())
+                        db_manager.add_knowledge_triplet(group_id, sub, pred, obj, conf)
+                    except:
+                        db_manager.add_knowledge_triplet(group_id, sub, pred, obj)
             elif line.startswith("EMO|"):
                 parts = line.split("|")
                 if len(parts) >= 2:

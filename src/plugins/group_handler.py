@@ -8,6 +8,7 @@ from src.aimodel.reply.chat import get_chat_reply
 from src.aimodel.memory.embeddings import get_embeddings
 from src.aimodel.memory.vector_db import vector_db
 from src.aimodel.memory.consolidation import consolidate_memories
+from src.aimodel.reply.personality import personality_manager
 from src.aimodel.decision.decide import should_i_reply
 import random
 import asyncio
@@ -205,11 +206,18 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             vectors = await get_embeddings([msg_to_store])
             vector_db.add_memory(group_id, msg_to_store, vectors[0])
             
-            # 2. 尝试进行记忆固化 (每 20 条消息处理一次)
-            # 我们直接在后台运行，不阻塞
+            # 2. 性格进化与好感度更新
+            await personality_manager.evolve_personality(group_id, display_name, llm_text)
+            
+            # 3. 实时模仿与黑话挖掘 (采样最近 20 条历史)
+            history = db_manager.get_chat_log(group_id, limit=20)
+            asyncio.create_task(personality_manager.capture_style_patterns(group_id, history))
+            asyncio.create_task(personality_manager.mine_slang(group_id, history))
+            
+            # 4. 尝试进行记忆固化 (每 50 条消息处理一次)
             await consolidate_memories(group_id)
         except Exception as e:
-            print(f"写入向量库或固化失败: {e}")
+            print(f"处理背景学习逻辑失败: {e}")
     
     asyncio.create_task(store_and_consolidate())
     

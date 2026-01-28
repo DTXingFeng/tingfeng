@@ -74,6 +74,16 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
     mood_value = db_manager.get_mood(group_id) if bot_config.enable_mood else 50
     thoughts = await personality_manager.generate_thoughts(group_id, user_name, current_msg, history, mood_value)
     
+    # 获取随机动态状态
+    current_state = personality_manager.get_random_state()
+    
+    # 获取学习到的风格和黑话
+    learned_styles = db_manager.get_style_patterns(group_id, limit=5)
+    learned_slangs = db_manager.get_slang_candidates(group_id, min_freq=3, stage=2)
+    
+    # 获取相关的三元组知识
+    knowledge_triplets = db_manager.get_knowledge_triplets(group_id, limit=10)
+    
     try:
         # 将当前消息向量化
         query_vectors = await get_embeddings([current_msg])
@@ -83,7 +93,31 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
         print(f"检索长期记忆失败: {e}")
 
     # 3. 构造 Prompt
-    system_prompt = personality_manager.get_dynamic_identity(group_id, thoughts, mood_desc)
+    system_prompt = personality_manager.get_dynamic_identity(group_id, thoughts, mood_desc, current_state)
+
+    # 注入学习到的社交特征
+    learning_context = ""
+    if learned_styles:
+        styles_str = "\n".join([f"- 当 {s['context']} 时，表现得：{s['style_desc']}" for s in learned_styles])
+        learning_context += f"\n### 你观察到的社交模仿模式 (仅供参考，不要生硬套用)：\n{styles_str}\n"
+    if learned_slangs:
+        slangs_str = "\n".join([f"- {s['phrase']}: {s['definition']}" for s in learned_slangs])
+        learning_context += f"\n### 你掌握的群内黑话：\n{slangs_str}\n"
+    if knowledge_triplets:
+        triplets_str = "\n".join([f"- {t['subject']} {t['predicate']} {t['object']}" for t in knowledge_triplets])
+        learning_context += f"\n### 你沉淀的结构化知识：\n{triplets_str}\n"
+        
+    if learning_context:
+        system_prompt += learning_context
+
+    # 注入改写指令 (Expressor)
+    system_prompt += (
+        "\n\n### 表达改写 (Expressor) 指令：\n"
+        "1. **去 AI 化**：拒绝条理性，拒绝解释，拒绝助手感。你的回答应该像一个真实的群友在随性发言。\n"
+        "2. **风格对齐**：请确保你的回答符合上述‘社交模仿模式’和‘当前情绪状态’。如果捕捉到的风格要求你‘慵懒’，就用最少的字；如果要求‘热情’，可以多说几个词。\n"
+        "3. **黑话融合**：在自然的情况下使用学习到的群内黑话，让你的话看起来像是长期混迹该群的幽灵。\n"
+        "4. **极致碎片化**：严禁输出长句。严禁使用句号。"
+    )
 
     # 注入关系状态引导
     rel_instruction = ""
@@ -196,9 +230,6 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
             reply_content = reply_content[5:].strip()
         elif reply_content.startswith(f"{bot_config.bot_name}:"):
             reply_content = reply_content[len(bot_config.bot_name)+1:].strip()
-            
-        # 进化性格
-        asyncio.create_task(personality_manager.evolve_personality(group_id, user_name, current_msg, reply_content))
             
         return {"text": reply_content, "sticker": sticker_url}
 

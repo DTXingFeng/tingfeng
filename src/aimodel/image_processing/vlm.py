@@ -8,9 +8,9 @@ from openai import AsyncOpenAI
 from src.config.ai_config import ai_config, ai_config_manager
 from src.utils.db_manager import db_manager
 
-async def process_and_encode_image(url: str, max_size: int = 1024) -> tuple[str, str]:
+async def process_and_encode_image(url: str, max_size: int = 1024) -> tuple[str, str, bool]:
     """
-    下载图片并返回 (base64编码, 内容哈希)
+    下载图片并返回 (base64编码, 内容哈希, 是否为动图)
     """
     async with httpx.AsyncClient() as client:
         response = await client.get(url)
@@ -24,17 +24,40 @@ async def process_and_encode_image(url: str, max_size: int = 1024) -> tuple[str,
         img_bytes = io.BytesIO(content)
         img = Image.open(img_bytes)
         
-        # 处理动图 (GIF, WebP 等)
-        if getattr(img, "is_animated", False):
-            # 动图通常很大且 API 不支持，我们提取第一帧
-            img.seek(0)
-            img = img.convert("RGB")
+        is_animated = getattr(img, "is_animated", False)
         
-        # 处理非 RGB 格式 (RGBA, P, L 等)
-        if img.mode != "RGB":
-            img = img.convert("RGB")
+        if is_animated:
+            # 动图处理：采样多帧并拼接
+            frames = []
+            n_frames = getattr(img, "n_frames", 1)
+            # 采样 4 帧：首帧、1/3处、2/3处、末帧
+            sample_indices = [0, n_frames // 3, (2 * n_frames) // 3, n_frames - 1]
+            # 去重并排序
+            sample_indices = sorted(list(set(sample_indices)))
             
-        # 检查尺寸
+            for i in sample_indices:
+                img.seek(i)
+                frame = img.convert("RGB")
+                # 缩小单帧尺寸以防拼接后过大
+                frame.thumbnail((512, 512))
+                frames.append(frame)
+            
+            # 横向拼接
+            total_width = sum(f.width for f in frames)
+            max_height = max(f.height for f in frames)
+            combined_img = Image.new('RGB', (total_width, max_height))
+            
+            x_offset = 0
+            for f in frames:
+                combined_img.paste(f, (x_offset, 0))
+                x_offset += f.width
+            img = combined_img
+        else:
+            # 非 RGB 格式处理
+            if img.mode != "RGB":
+                img = img.convert("RGB")
+            
+        # 最终缩放检查
         width, height = img.size
         if max(width, height) > max_size:
             if width > height:
@@ -43,15 +66,14 @@ async def process_and_encode_image(url: str, max_size: int = 1024) -> tuple[str,
             else:
                 new_height = max_size
                 new_width = int(width * (max_size / height))
-            
             img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
             
         # 转换回 base64
         buffered = io.BytesIO()
-        img.save(buffered, format="JPEG", quality=85)
+        img.save(buffered, format="JPEG", quality=80)
         base64_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
         
-        return base64_str, file_hash
+        return base64_str, file_hash, is_animated
 
 async def describe_image(image_url: str, is_sticker: bool = False) -> str:
     """
@@ -59,7 +81,7 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
     """
     # 1. 预处理并获取哈希
     try:
-        base64_image, file_hash = await process_and_encode_image(image_url)
+        base64_image, file_hash, is_gif = await process_and_encode_image(image_url)
     except Exception as e:
         return f"图片处理失败: {str(e)}"
 
@@ -67,7 +89,6 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
     if is_sticker:
         cache = db_manager.get_sticker_cache(file_hash)
         if cache:
-            # print(f"命中表情包缓存: {cache['tag']} - {cache['description']}")
             return f"[表情描述: {cache['description']}, 标签: {cache['tag']}]"
 
     # 3. 获取 AI 配置
@@ -82,17 +103,19 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
     client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
 
     # 4. 准备提示词
+    gif_hint = "（这张图片是一张动图/GIF 的多帧采样拼接图，请分析其动作序列和变化过程）" if is_gif else ""
+    
     if is_sticker:
         prompt = (
-            "你是一个表情包专家。请深度解析这张表情包并完成以下任务：\n"
+            f"你是一个表情包专家。{gif_hint}请深度解析这张表情包并完成以下任务：\n"
             "1. **文字提取**：必须完整、准确地提取图中出现的文字内容（如果有）。\n"
-            "2. **画面描述**：用一句话描述角色的动作、神情及整体画风。\n"
+            "2. **画面描述**：用一句话描述角色的动作、神情及整体画风。如果是动图，请描述其动作过程。\n"
             "3. **情感定性**：从[开心、大哭、暴躁、委屈、傲娇、得意、摸摸头、疑惑、震惊]中选一个最贴切的标签。\n"
-            "输出格式：'标签|文字:\"内容\", 描述:\"具体画面\"'。例如：'开心|文字:\"好耶\", 描述:\"一只白色的猫咪在举手欢呼\"'。"
+            "输出格式：'标签|文字:\"内容\", 描述:\"具体画面\"'。"
         )
     else:
         prompt = (
-            "请用中文深度描述这张图片的内容。如果有文字，必须完整提取并概括其核心含义。请留意图中的主体、场景及直观感受，输出为一段 50 字以内的流畅平文本，不要分点陈述，捕捉最关键的信息点或槽点。"
+            f"请用中文深度描述这张图片的内容。{gif_hint}如果有文字，必须完整提取并概括其核心含义。请留意图中的主体、场景及直观感受，输出为一段 50 字以内的流畅平文本。"
         )
 
     # 5. 发送请求
