@@ -93,7 +93,9 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                             if mood_impact != 0:
                                 db_manager.update_mood(group_id, mood_impact)
                                 
-                            if decision.get("should_reply"):
+                            # 只有 should_reply 为 True 且兴趣度足够高时才回复
+                            interest_score = decision.get("interest_score", 0)
+                            if decision.get("should_reply") and interest_score >= 0.7:
                                 # 执行回复逻辑
                                 await process_my_logic(
                                     bot=bot,
@@ -300,7 +302,13 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                     if mood_impact != 0:
                         db_manager.update_mood(group_id, mood_impact)
                     
-                    do_reply = decision.get("should_reply", False)
+                    # 只有 should_reply 为 True 且兴趣度足够高时才回复 (避免随意插话)
+                    interest_score = decision.get("interest_score", 0)
+                    if decision.get("should_reply", False) and interest_score >= 0.7:
+                        do_reply = True
+                    else:
+                        do_reply = False
+                        
                     target_user = decision.get("reply_to_user", display_name)
                 finally:
                     deciding_groups.remove(group_id)
