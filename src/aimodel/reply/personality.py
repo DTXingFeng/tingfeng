@@ -48,7 +48,7 @@ class PersonalityManager:
         vibe = state.get("style_vibe") or "正常聊天"
         
         # 准备思考用的 Prompt
-        model_alias = ai_config.reply_model
+        model_alias = ai_config.inner_voice_model or ai_config.reply_model
         creds = ai_config_manager.get_model_credentials(model_alias)
         if not creds:
             return ""
@@ -131,7 +131,7 @@ class PersonalityManager:
         """
         AI 为 Bot 生成今日作息表。
         """
-        model_alias = ai_config.reply_model
+        model_alias = ai_config.personality_refine_model or ai_config.reply_model
         creds = ai_config_manager.get_model_credentials(model_alias)
         if not creds:
             return []
@@ -193,7 +193,7 @@ class PersonalityManager:
         if len(history) < 5:
             return
 
-        model_alias = ai_config.reply_model
+        model_alias = ai_config.style_mimic_model or ai_config.reply_model
         creds = ai_config_manager.get_model_credentials(model_alias)
         if not creds:
             return
@@ -248,7 +248,7 @@ class PersonalityManager:
         if len(history) < 5:
             return
 
-        model_alias = ai_config.reply_model
+        model_alias = ai_config.slang_mining_model or ai_config.reply_model
         creds = ai_config_manager.get_model_credentials(model_alias)
         if not creds:
             return
@@ -396,7 +396,7 @@ class PersonalityManager:
         if len(history) < 10:
             return
 
-        model_alias = ai_config.reply_model
+        model_alias = ai_config.context_summary_model or ai_config.reply_model
         creds = ai_config_manager.get_model_credentials(model_alias)
         if not creds:
             return

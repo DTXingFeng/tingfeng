@@ -18,7 +18,7 @@ async def dream_and_optimize(group_id: int):
     if not triplets and not patterns:
         return
 
-    model_alias = ai_config.reply_model
+    model_alias = ai_config.dream_agent_model or ai_config.reply_model
     creds = ai_config_manager.get_model_credentials(model_alias)
     if not creds: return
     client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
