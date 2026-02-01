@@ -86,3 +86,5 @@ Thumbs.db
 # Large files
 *.tar
 tingfeng-bot.tar
+
+.trae/

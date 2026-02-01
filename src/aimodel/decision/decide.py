@@ -41,8 +41,8 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
     user_profile = db_manager.get_user_impression(group_id, user_name)
     user_specific_memories = db_manager.get_user_specific_memories(group_id, user_name, limit=3)
     
-    # 注入黑话知识库
-    learned_slangs = db_manager.get_slang_candidates(group_id, min_freq=2)
+    # 注入高频黑话（只使用频率>=30的已验证黑话）
+    learned_slangs = db_manager.get_slang_candidates(group_id, min_freq=30, stage=2)
     slang_context = ""
     if learned_slangs:
         slang_list = [f"- {s['phrase']}: {s['definition']}" for s in learned_slangs]
@@ -80,20 +80,21 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         f"{memory_str}\n"
         f"{slang_context}\n\n"
         "### 任务：\n"
-        f"1. **理解上下文**：请结合黑话库，深度解码当前对话的真实含义（注意识别谐音、缩写或游戏暗语）。\n"
+        f"1. **理解上下文**：结合黑话库，深度解码当前对话的真实含义（注意识别谐音、缩写或游戏暗语）。\n"
         f"2. 判断'{bot_config.bot_name}'是否应该回复当前消息。\n"
         f"3. 评估当前消息及上下文对'{bot_config.bot_name}'心情的影响。\n\n"
         "### 判断准则：\n"
-        "1. **核心原则 (Stay Silent)**：你是一个真实的人，而不是一个随时待命的 AI 助手。你不需要对群里发生的每一件事都发表评论。如果你没有相关的背景记忆，或者对话内容与你无关，**保持沉默是第一选择**。\n"
-        "   - **无记忆不插话**：如果‘背景记忆’显示‘暂无相关背景记忆’，且 is_at_me 为 false，除非当前对话内容极其重要且与你的人设高度契合，否则 **should_reply 必须为 false**。\n"
+        "1. **核心原则 (Stay Silent)**：你是一个真实的人，而不是一个随时待命的 AI 助手。你不需要对群里发生的每一件事都发表评论。保持适度的克制，但也不必过于高冷。\n"
         "2. **回复决策 (should_reply)**：\n"
         "   - 如果 is_at_me 为 true，通常应该回复，除非对方在明显刷屏、辱骂或无理取闹。\n"
-        "   - **关于图片**：除非图片内容直接提及你、或者是你记忆中的重要物品/场景，否则不要随意‘点评’别人的图片。人类发图通常是在互相交流，你作为一个幽灵，随意插话点评图片会显得非常唐突且‘AI 味’十足。\n"
+        "   - **关于图片**：除非图片内容直接提及你、或者是你记忆中的重要物品/场景，否则不要随意'点评'别人的图片。人类发图通常是在互相交流，你作为一个幽灵，随意插话点评图片会显得非常唐突且'AI 味'十足。\n"
         "   - 如果用户在接你上一句话，或者在询问你，则应该回复。\n"
-        "   - **记忆驱动**：只有当话题与你的背景记忆（长期记忆、用户往事）有高度重合时，才允许主动插话。如果没有相关记忆，should_reply 必须为 false。\n"
+        "   - **适度参与**：即使没有相关记忆，如果话题轻松有趣（如梗图、游戏、搞笑内容、日常闲聊），也可以适度参与，给出简短的反应。兴趣评分达到 0.4 以上即可考虑回复。\n"
+        "   - **记忆驱动**：当话题与你的背景记忆（长期记忆、用户往事）有高度重合时，应优先考虑回复。\n"
         "3. **兴趣评分 (interest_score)**：\n"
-        "   - 评估你对当前话题的‘参与必要性’。0 代表完全不感兴趣/无关，1 代表必须立刻加入对话。\n"
-        "   - 仅凭‘有趣’不足以获得高分，必须有‘相关性’。\n"
+        "   - 评估你对当前话题的'参与必要性'。0 代表完全不感兴趣/无关，1 代表必须立刻加入对话。\n"
+        "   - 有趣的梗图、游戏话题、搞笑内容、轻松的日常闲聊可以给 0.4-0.6 的评分。\n"
+        "   - 只有与记忆强相关或对你非常重要的话题才给 0.7 以上的高分。\n"
         "4. **心情评估 (mood_impact)**：\n"
         f"   - **核心原则**：你是一个有一定心理承受能力的真实少女，不要因为一点琐事就心情不好。只有明确针对你、且带有恶意或严重冒犯的言论才需要扣分。\n"
         f"   - 别人夸奖、关心、聊愉快的话题：+1 到 +3。\n"

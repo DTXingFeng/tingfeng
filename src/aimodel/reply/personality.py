@@ -322,7 +322,7 @@ class PersonalityManager:
         """
         语义演化机制：从对话中挖掘并演化群内黑话。
         """
-        if len(history) < 5:
+        if len(history) < 10:
             return
 
         model_alias = ai_config.slang_mining_model or ai_config.reply_model
@@ -335,25 +335,49 @@ class PersonalityManager:
         history_str = "\n".join(history[-20:])
         
         mining_prompt = f"""
-你现在是 {bot_config.bot_name} 的黑话挖掘模块。请识别以下对话中出现的群内特有黑话、梗、游戏暗语或为了绕过敏感词检测而使用的谐音/缩写。
+你现在是 {bot_config.bot_name} 的黑话挖掘模块。请从以下对话中识别群内特有黑话、梗、游戏暗语。
 
-### 任务要求：
-1. **深度解码**：寻找那些在普通语境下含义不明，但在该群聊中被频繁使用的词汇。
-2. **重点关注**：
-   - **谐音/变体**：例如为了绕过检测而使用的拼音缩写、同音异形词。
-   - **游戏黑话**：特定游戏的术语或梗。
-   - **抽象表达**：群友之间形成的独特默契用语。
-3. 为每个词汇提供基于上下文的真实定义。
-4. 请输出 JSON 列表格式。
+### 严格筛选标准（必须同时满足）：
+1. **明确性**：该词汇在普通语境下含义不明，但在群内被频繁使用
+2. **重复性**：在当前对话中至少出现 2 次以上，或者从上下文能推断是常用表达
+3. **独特性**：不是普通网络用语，而是该群特有的默契表达
+4. **可解释性**：能够根据上下文给出明确、具体的定义
 
-### 示例输出：
+### 只挖掘以下类型：
+- 明显的谐音梗（如"依托构思" = "一坨狗屎"）
+- 游戏圈特定的术语/缩写（如"DRG" = "深岩银河"）
+- 群友约定俗成的暗语
+- 为了绕过检测而使用的变体
+
+### 严禁挖掘：
+- 偶尔出现的普通词汇
+- 模糊不清、无法确定含义的表达
+- 网络上通用的流行语（如"绝绝子"、"yyds"等）
+- 明显的个人打字错误
+- 没有上下文支持的猜测
+
+### 判定流程：
+对于每个候选词，问自己三个问题：
+1. 它在当前对话中是否至少出现 2 次？否 → 忽略
+2. 它的含义是否明确可确定？否 → 忽略
+3. 它是该群特有的表达吗？否 → 忽略
+
+只有三个问题都回答"是"，才认定为黑话。
+
+### 示例输出（高质量黑话）：
 [
   {{"phrase": "爆金币", "definition": "指让某人出钱或付出代价，带有某种解构色彩"}},
-  {{"phrase": "依托构思", "definition": "谐音‘一坨狗屎’，用于吐槽质量极差的东西"}}
+  {{"phrase": "依托构思", "definition": "谐音'一坨狗屎'，用于吐槽质量极差的东西"}},
+  {{"phrase": "DRG", "definition": "游戏《深岩银河》的缩写"}}
 ]
 
 ### 待分析对话：
 {history_str}
+
+### 输出要求：
+- 只输出 JSON 数组，没有匹配则输出空数组 []
+- 宁缺毋滥，宁可漏掉也不要误判
+- 确保每个定义都具体、准确
 """
         try:
             optimized_prompt, prompt_tokens = context_manager.truncate_text(
@@ -391,6 +415,11 @@ class PersonalityManager:
                         phrase = s.get("phrase")
                         definition = s.get("definition")
                         if phrase:
+                            # 验证候选词：检查定义是否具体、是否过于模糊
+                            if not self._is_valid_slang_candidate(phrase, definition, history_str):
+                                logger.info(f"黑话候选被过滤：{phrase}（不符合质量标准）")
+                                continue
+                            
                             # 记录并更新频率，同时附带当前上下文样本
                             db_manager.update_slang_candidate(
                                 group_id, 
@@ -406,6 +435,38 @@ class PersonalityManager:
         except Exception as e:
             logger.error(f"黑话挖掘失败: {e}", exc_info=True)
 
+    def _is_valid_slang_candidate(self, phrase: str, definition: str, context: str) -> bool:
+        """
+        验证黑话候选词的质量，过滤掉低质量候选
+        """
+        # 1. 候选词长度检查（2-8个字符之间）
+        if len(phrase) < 2 or len(phrase) > 8:
+            return False
+        
+        # 2. 检查定义是否过于模糊
+        uncertain_keywords = ["可能", "或许", "应该", "需要结合", "具体含义", "未知", "不清楚", "猜测"]
+        if any(keyword in definition for keyword in uncertain_keywords):
+            return False
+        
+        # 3. 检查定义是否过于简短（少于10字说明不具体）
+        if len(definition) < 10:
+            return False
+        
+        # 4. 检查定义是否只是重复候选词（如"指这个词"）
+        if phrase in definition and len(definition) < len(phrase) * 2:
+            return False
+        
+        # 5. 检查候选词是否在上下文中实际出现
+        if phrase not in context:
+            return False
+        
+        # 6. 检查候选词是否过于常见（避免记录普通词汇）
+        common_words = ["的", "了", "是", "在", "有", "不", "和", "我", "你", "他", "这", "那", "好", "坏", "大", "小"]
+        if phrase in common_words:
+            return False
+        
+        return True
+
     async def _refine_slang_definition(self, group_id: int, phrase: str):
         """
         多轮差分推理：根据积累的上下文样本，修正黑话定义。
@@ -418,9 +479,10 @@ class PersonalityManager:
         stage = candidate["stage"]
         
         # 判定是否需要升级阶段
+        # 提高频率阈值，确保只有真正高频的黑话才被认定
         new_stage = stage
-        if freq >= 60 and stage < 3: new_stage = 3
-        elif freq >= 10 and stage < 2: new_stage = 2
+        if freq >= 100 and stage < 3: new_stage = 3
+        elif freq >= 30 and stage < 2: new_stage = 2
         
         if new_stage == stage: return # 阶段未改变，暂不重推
 

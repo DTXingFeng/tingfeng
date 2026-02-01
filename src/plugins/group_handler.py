@@ -118,7 +118,7 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                 
                             # 只有 should_reply 为 True 且兴趣度足够高时才回复
                             interest_score = decision.get("interest_score", 0)
-                            if decision.get("should_reply") and interest_score >= 0.7:
+                            if decision.get("should_reply") and interest_score >= 0.4:
                                 # 执行回复逻辑
                                 await process_my_logic(
                                     bot=bot,
@@ -134,6 +134,25 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     user_id=ctx['user_id'],
                                     nickname=ctx['nickname'],
                                     card=decision.get("reply_to_user", ctx['display_name']),
+                                    role=ctx['role'],
+                                    raw_msg=ctx['raw_msg']
+                                )
+                            # 即使 AI 决定不回复，也有一定概率随机回复
+                            elif random.random() < bot_config.reply_rate:
+                                await process_my_logic(
+                                    bot=bot,
+                                    event=ctx['event'],
+                                    message_id=ctx['message_id'],
+                                    text=ctx['text'],
+                                    llm_text=ctx['llm_text'],
+                                    normal_images=ctx['normal_images'],
+                                    stickers=ctx['stickers'],
+                                    flash_images=ctx['flash_images'],
+                                    faces=ctx['faces'],
+                                    group_id=group_id,
+                                    user_id=ctx['user_id'],
+                                    nickname=ctx['nickname'],
+                                    card=ctx['display_name'],
                                     role=ctx['role'],
                                     raw_msg=ctx['raw_msg']
                                 )
@@ -327,7 +346,10 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                     
                     # 只有 should_reply 为 True 且兴趣度足够高时才回复 (避免随意插话)
                     interest_score = decision.get("interest_score", 0)
-                    if decision.get("should_reply", False) and interest_score >= 0.7:
+                    if decision.get("should_reply", False) and interest_score >= 0.4:
+                        do_reply = True
+                    # 即使 AI 决定不回复，也有一定概率随机回复
+                    elif random.random() < bot_config.reply_rate:
                         do_reply = True
                     else:
                         do_reply = False
