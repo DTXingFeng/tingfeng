@@ -7,6 +7,8 @@ from PIL import Image
 from openai import AsyncOpenAI
 from src.config.ai_config import ai_config, ai_config_manager
 from src.utils.db_manager import db_manager
+from src.utils.context_manager import context_manager
+import asyncio
 
 async def process_and_encode_image(url: str, max_size: int = 1024) -> tuple[str, str, bool]:
     """
@@ -100,7 +102,7 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
     if not creds:
         return f"找不到模型别名 '{model_alias}' 的配置"
 
-    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=60.0)
 
     # 4. 准备提示词
     gif_hint = "（这张图片是一张动图/GIF 的多帧采样拼接图，请分析其动作序列和变化过程）" if is_gif else ""
@@ -109,7 +111,7 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
         prompt = (
             f"你是一个表情包专家。{gif_hint}请深度解析这张表情包并完成以下任务：\n"
             "1. **文字提取**：必须完整、准确地提取图中出现的文字内容（如果有）。\n"
-            "2. **画面描述**：用一句话描述角色的动作、神情及整体画风。如果是动图，请描述其动作过程。\n"
+            "2. **画面描述** 用一句话描述角色的动作、神情及整体画风。如果是动图，请描述其动作过程。\n"
             "3. **情感定性**：从[开心、大哭、暴躁、委屈、傲娇、得意、摸摸头、疑惑、震惊]中选一个最贴切的标签。\n"
             "输出格式：'标签|文字:\"内容\", 描述:\"具体画面\"'。"
         )
@@ -118,7 +120,14 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
             f"请用中文深度描述这张图片的内容。{gif_hint}如果有文字，必须完整提取并概括其核心含义。请留意图中的主体、场景及直观感受，输出为一段 50 字以内的流畅平文本。"
         )
 
-    # 5. 发送请求
+    # 5. 上下文截断检查（主要针对文本提示词，虽然通常不会超限，但为了统一管理）
+    optimized_prompt, prompt_tokens = context_manager.truncate_text(
+        text=prompt,
+        model_alias=model_alias,
+        max_output_tokens=500
+    )
+
+    # 6. 发送请求
     try:
         response = await client.chat.completions.create(
             model=creds["model"],
@@ -126,7 +135,7 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": prompt},
+                        {"type": "text", "text": optimized_prompt},
                         {
                             "type": "image_url",
                             "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},

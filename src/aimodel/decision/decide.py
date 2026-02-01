@@ -4,8 +4,13 @@ from src.config.config import bot_config
 from src.utils.db_manager import db_manager
 from src.aimodel.memory.embeddings import get_embeddings
 from src.aimodel.memory.vector_db import vector_db
+from src.utils.context_manager import context_manager
+from src.utils.logger import get_logger
+from src.utils.error_handler import handle_errors, APIError
 from typing import Optional
 import json
+
+logger = get_logger(__name__)
 
 async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_me: bool = False, user_id: Optional[int] = None) -> dict:
     """
@@ -113,12 +118,22 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         "}"
     )
 
-    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
     try:
+        optimized_prompt, prompt_tokens = context_manager.truncate_text(
+            text=prompt,
+            model_alias=model_alias,
+            max_output_tokens=200,
+            reserve_ratio=0.1
+        )
+        
+        if prompt_tokens > 0:
+            print(f"[上下文管理] 决策模型: {model_alias}, 使用tokens: {prompt_tokens}/{context_manager.get_model_max_tokens(model_alias)}")
+        
         response = await client.chat.completions.create(
             model=creds["model"],
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": optimized_prompt}],
             response_format={"type": "json_object"}
         )
         
@@ -147,6 +162,9 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
             "is_replying_to_bot": is_replying_to_bot
         }
 
+    except json.JSONDecodeError as e:
+        logger.error(f"决策结果JSON解析失败: {e}, 原始内容: {content}")
+        return {"should_reply": is_at_me, "mood_impact": 0}
     except Exception as e:
-        print(f"决策过程出错: {e}")
+        logger.error(f"决策过程出错: {e}", exc_info=True)
         return {"should_reply": is_at_me, "mood_impact": 0}

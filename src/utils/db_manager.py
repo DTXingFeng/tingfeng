@@ -43,6 +43,7 @@ class DBManager:
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            
             # 创建用户印象表
             # group_id: 群号
             # user_name: 用户名
@@ -178,6 +179,18 @@ class DBManager:
                     UNIQUE(group_id, subject, predicate, object)
                 )
             ''')
+            
+            # 创建数据库索引以提高查询性能
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_history_group_time ON chat_history(group_id, timestamp)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_chat_history_group_processed ON chat_history(group_id, is_processed, timestamp)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_stickers_tag ON stickers(tag)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_memories_group_user_time ON user_memories(group_id, user_name, created_at)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_user_relationships_favorability ON user_relationships(favorability)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_style_patterns_weight ON style_patterns(weight DESC)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_slang_candidates_query ON slang_candidates(group_id, stage, frequency)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_knowledge_triplets_confidence ON knowledge_triplets(confidence DESC)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_knowledge_triplets_subject ON knowledge_triplets(subject)')
+            
             conn.commit()
 
     def add_chat_log(self, group_id: int, msg: str):
@@ -589,6 +602,60 @@ class DBManager:
             cursor = conn.cursor()
             cursor.execute(query, tuple(params))
             return [{"subject": row[0], "predicate": row[1], "object": row[2], "confidence": row[3]} for row in cursor.fetchall()]
+
+    def get_db_stats(self) -> Dict[str, int]:
+        """获取数据库统计信息"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            stats = {}
+            
+            tables = ['chat_history', 'user_memories', 'stickers', 'style_patterns', 'slang_candidates', 'knowledge_triplets']
+            for table in tables:
+                cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                stats[table] = cursor.fetchone()[0]
+            
+            return stats
+
+    def cleanup_old_data(self, days: int = 30):
+        """
+        清理旧数据以释放空间
+        
+        Args:
+            days: 保留最近多少天的数据，默认30天
+        """
+        from datetime import datetime, timedelta
+        
+        cutoff_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+        deleted_counts = {}
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            try:
+                cursor.execute(f"DELETE FROM chat_history WHERE timestamp < '{cutoff_date}' AND is_processed = 1")
+                deleted_counts['chat_history'] = cursor.rowcount
+                
+                cursor.execute(f"DELETE FROM user_memories WHERE created_at < '{cutoff_date}'")
+                deleted_counts['user_memories'] = cursor.rowcount
+                
+                cursor.execute(f"DELETE FROM style_patterns WHERE updated_at < '{cutoff_date}' AND weight < 5")
+                deleted_counts['style_patterns'] = cursor.rowcount
+                
+                cursor.execute(f"DELETE FROM slang_candidates WHERE updated_at < '{cutoff_date}' AND stage < 3 AND frequency < 5")
+                deleted_counts['slang_candidates'] = cursor.rowcount
+                
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                raise e
+        
+        return deleted_counts
+
+    def vacuum_database(self):
+        """执行数据库优化，回收空间"""
+        with self._get_connection() as conn:
+            conn.execute("VACUUM")
+            conn.commit()
 
 # 全局单例
 db_manager = DBManager()

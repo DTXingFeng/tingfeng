@@ -7,6 +7,18 @@ from src.config.config import bot_config
 
 driver = get_driver()
 
+async def generate_schedule_for_group(group_id: int, today_str: str):
+    """
+    为单个群组生成作息表
+    """
+    try:
+        schedule = db_manager.get_bot_schedule(group_id, today_str)
+        if not schedule:
+            logger.info(f"正在为群 {group_id} 生成今日作息表...")
+            await personality_manager.generate_daily_schedule(group_id)
+    except Exception as e:
+        logger.error(f"为群 {group_id} 生成作息表失败: {e}")
+
 async def daily_schedule_worker():
     """
     每日作息表更新工人：
@@ -21,11 +33,10 @@ async def daily_schedule_worker():
             # 获取所有有记录的群组
             groups = db_manager.get_all_groups()
             
-            for group_id in groups:
-                schedule = db_manager.get_bot_schedule(group_id, today_str)
-                if not schedule:
-                    logger.info(f"正在为群 {group_id} 生成今日作息表...")
-                    await personality_manager.generate_daily_schedule(group_id)
+            if groups:
+                # 并发处理所有群组的作息表生成
+                tasks = [generate_schedule_for_group(group_id, today_str) for group_id in groups]
+                await asyncio.gather(*tasks, return_exceptions=True)
             
             # 计算距离明天凌晨 00:05 的秒数
             tomorrow = now + datetime.timedelta(days=1)
@@ -37,6 +48,8 @@ async def daily_schedule_worker():
             
         except Exception as e:
             logger.error(f"每日作息表定时任务出错: {e}")
+            import traceback
+            traceback.print_exc()
             await asyncio.sleep(300) # 出错后等 5 分钟再试
 
 @driver.on_startup

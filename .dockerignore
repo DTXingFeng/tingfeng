@@ -1,24 +1,72 @@
-# 忽略 Git 文件夹
-.git
-.gitignore
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
 
-# 忽略虚拟环境
-venv
+# Virtual environments
+venv/
+env/
+ENV/
 .venv
-__pycache__
-*.pyc
 
-# 忽略本地开发的数据和日志
-data/
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Logs
+logs/
 *.log
+
+# Database
 *.db
+*.sqlite
 *.sqlite3
 
-# 忽略敏感配置（镜像内应使用生成的默认配置或挂载）
-.env
-config.yaml
-ai_config.yaml
+# Vector DB
+chroma/
+chromadb/
 
-# 忽略 IDE 缓存
-.vscode
-.idea
+# Configuration (use .env instead)
+config/ai_config.yaml
+.env
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Misc
+.DS_Store
+Thumbs.db
+data/

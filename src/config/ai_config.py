@@ -12,6 +12,7 @@ class ModelConfig(BaseModel):
     platform_alias: str
     model_name: str
     description: Optional[str] = ""
+    max_context_tokens: int = 4096
 
 class AIConfig(BaseModel):
     platforms: Dict[str, PlatformConfig] = {}

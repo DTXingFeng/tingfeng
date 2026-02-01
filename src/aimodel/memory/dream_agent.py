@@ -2,6 +2,7 @@ import asyncio
 from openai import AsyncOpenAI
 from src.config.ai_config import ai_config, ai_config_manager
 from src.config.config import bot_config
+from src.utils.context_manager import context_manager
 from src.utils.db_manager import db_manager
 from nonebot import logger
 
@@ -21,7 +22,7 @@ async def dream_and_optimize(group_id: int):
     model_alias = ai_config.dream_agent_model or ai_config.reply_model
     creds = ai_config_manager.get_model_credentials(model_alias)
     if not creds: return
-    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=60.0)
     
     # 构造复盘数据摘要
     triplet_str = "\n".join([f"- {t['subject']} --({t['predicate']})--> {t['object']}" for t in triplets])
@@ -48,9 +49,15 @@ async def dream_and_optimize(group_id: int):
 }}
 """
     try:
+        optimized_prompt, prompt_tokens = context_manager.truncate_text(
+            text=dream_prompt,
+            model_alias=model_alias,
+            max_output_tokens=1000
+        )
+        
         response = await client.chat.completions.create(
             model=creds["model"],
-            messages=[{"role": "system", "content": dream_prompt}],
+            messages=[{"role": "system", "content": optimized_prompt}],
             max_tokens=1000,
             temperature=0.4,
             response_format={"type": "json_object"}

@@ -4,7 +4,12 @@ from typing import Dict, List, Optional
 from src.utils.db_manager import db_manager
 from src.config.config import bot_config
 from src.config.ai_config import ai_config, ai_config_manager
+from src.utils.context_manager import context_manager
+from src.utils.logger import get_logger
+from src.utils.error_handler import handle_errors, APIError
 from openai import AsyncOpenAI
+
+logger = get_logger(__name__)
 
 class PersonalityManager:
     """
@@ -53,7 +58,7 @@ class PersonalityManager:
         if not creds:
             return ""
 
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=20.0)
         
         history_context = "\n".join(history[-5:]) # 只取最近5条参考
         mood_color = self.get_mood_color(mood_value)
@@ -78,9 +83,15 @@ class PersonalityManager:
 注意：直接输出独白内容，不要包含任何格式标签，不要直接对用户说话。
 """
         try:
+            optimized_prompt, prompt_tokens = context_manager.truncate_text(
+                text=thought_prompt,
+                model_alias=model_alias,
+                max_output_tokens=150
+            )
+            
             response = await client.chat.completions.create(
                 model=creds["model"],
-                messages=[{"role": "system", "content": thought_prompt}],
+                messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=150,
                 temperature=0.8
             )
@@ -89,7 +100,7 @@ class PersonalityManager:
             db_manager.update_personality_state(group_id, thoughts=thoughts)
             return thoughts
         except Exception as e:
-            print(f"生成内心独白失败: {e}")
+            logger.error(f"生成内心独白失败: {e}", exc_info=True)
             return ""
 
     def get_dynamic_identity(self, group_id: int, thoughts: str, mood_desc: str, current_state: Dict[str, str] = None) -> str:
@@ -99,9 +110,18 @@ class PersonalityManager:
         state = db_manager.get_personality_state(group_id)
         style_data = {}
         try:
-            style_data = json.loads(state.get("style_vibe") or "{}")
+            style_vibe = state.get("style_vibe") or "{}"
+            if isinstance(style_vibe, str):
+                style_data = json.loads(style_vibe)
+            elif isinstance(style_vibe, dict):
+                style_data = style_vibe
+            else:
+                style_data = {"vibe": "正常聊天"}
         except:
             style_data = {"vibe": state.get("style_vibe") or "正常聊天"}
+        
+        if not isinstance(style_data, dict):
+            style_data = {"vibe": "正常聊天"}
             
         vibe = style_data.get("vibe", "正常聊天")
         slang = style_data.get("slang", [])
@@ -136,7 +156,7 @@ class PersonalityManager:
         if not creds:
             return []
 
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
         
         schedule_prompt = f"""
 你现在是 {bot_config.bot_name} 的时间管理模块。请根据以下人格设定，为她生成一份今日的“极致碎片化作息表”。
@@ -157,33 +177,71 @@ class PersonalityManager:
 ]
 """
         try:
+            optimized_prompt, prompt_tokens = context_manager.truncate_text(
+                text=schedule_prompt,
+                model_alias=model_alias,
+                max_output_tokens=1000
+            )
+            
             response = await client.chat.completions.create(
                 model=creds["model"],
-                messages=[{"role": "system", "content": schedule_prompt}],
+                messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=1000,
                 temperature=0.7,
                 response_format={"type": "json_object"}
             )
             result = response.choices[0].message.content.strip()
-            # 兼容性处理：有的模型可能返回 {"schedule": [...]}
-            data = json.loads(result)
-            schedule = data.get("schedule", data) if isinstance(data, dict) else data
+            
+            # 解析 JSON 并处理各种可能的格式
+            try:
+                data = json.loads(result)
+            except json.JSONDecodeError as e:
+                logger.error(f"AI 返回的 JSON 格式错误: {e}, 原始内容: {result}")
+                return []
+            
+            # 归一化处理各种可能的 JSON 结构
+            schedule = []
+            if isinstance(data, list):
+                schedule = data
+            elif isinstance(data, dict):
+                if "schedule" in data and isinstance(data["schedule"], list):
+                    schedule = data["schedule"]
+                else:
+                    # 处理字典映射格式，例如 {"09:00": {"start": "09:00", ...}}
+                    vals = list(data.values())
+                    if vals and isinstance(vals[0], dict) and "start" in vals[0]:
+                        schedule = vals
+                    else:
+                        # 尝试将整个字典视为一个项（虽然不太可能，但增加鲁棒性）
+                        schedule = [data]
+            
+            # 验证每个 schedule 项的格式
+            valid_schedule = []
+            for item in schedule:
+                if isinstance(item, dict) and "start" in item and "end" in item and "activity" in item:
+                    valid_schedule.append(item)
+                else:
+                    logger.warning(f"跳过格式错误的作息项: {item}")
+            
+            if not valid_schedule:
+                logger.error(f"作息表格式错误，期望列表或有效的字典映射，实际: {type(data)}, 原始内容: {result}")
+                return []
             
             # 保存到数据库
             import datetime
             today = datetime.datetime.now().strftime("%Y-%m-%d")
-            db_manager.update_bot_schedule(group_id, today, schedule)
+            db_manager.update_bot_schedule(group_id, today, valid_schedule)
             
             # 日志输出，方便调试
             from nonebot import logger
             logger.info(f"成功为群 {group_id} 生成作息表：")
-            for item in schedule:
+            for item in valid_schedule:
                 status = "✅可水群" if item.get("can_chat") else "💤不水群"
                 logger.info(f"  [{item.get('start')} - {item.get('end')}] {item.get('activity')} ({status})")
                 
-            return schedule
+            return valid_schedule
         except Exception as e:
-            print(f"生成每日作息表失败: {e}")
+            logger.error(f"生成每日作息表失败: {e}", exc_info=True)
             return []
 
     async def capture_style_patterns(self, group_id: int, history: List[str]):
@@ -198,7 +256,7 @@ class PersonalityManager:
         if not creds:
             return
 
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
         
         history_str = "\n".join(history[-20:]) # 采样最近 20 条
         
@@ -220,26 +278,45 @@ class PersonalityManager:
 {history_str}
 """
         try:
+            optimized_prompt, prompt_tokens = context_manager.truncate_text(
+                text=mimicry_prompt,
+                model_alias=model_alias,
+                max_output_tokens=500
+            )
+            
             response = await client.chat.completions.create(
                 model=creds["model"],
-                messages=[{"role": "system", "content": mimicry_prompt}],
+                messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=500,
                 temperature=0.3,
                 response_format={"type": "json_object"}
             )
             result = response.choices[0].message.content.strip()
-            data = json.loads(result)
-            patterns = data.get("patterns", data) if isinstance(data, dict) else data
+            
+            try:
+                data = json.loads(result)
+            except json.JSONDecodeError as e:
+                logger.error(f"AI 返回的 JSON 格式错误: {e}, 原始内容: {result}")
+                return
+            
+            if isinstance(data, dict):
+                patterns = data.get("patterns", data)
+            elif isinstance(data, list):
+                patterns = data
+            else:
+                logger.error(f"AI 返回的数据类型错误: {type(data)}, 原始内容: {result}")
+                return
             
             if isinstance(patterns, list):
                 for p in patterns:
-                    context = p.get("context")
-                    style = p.get("style")
-                    if context and style:
-                        db_manager.add_style_pattern(group_id, context, style)
+                    if isinstance(p, dict):
+                        context = p.get("context")
+                        style = p.get("style")
+                        if context and style:
+                            db_manager.add_style_pattern(group_id, context, style)
                         
         except Exception as e:
-            print(f"风格捕捉失败: {e}")
+            logger.error(f"风格捕捉失败: {e}", exc_info=True)
 
     async def mine_slang(self, group_id: int, history: List[str]):
         """
@@ -253,7 +330,7 @@ class PersonalityManager:
         if not creds:
             return
 
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
         
         history_str = "\n".join(history[-20:])
         
@@ -279,36 +356,55 @@ class PersonalityManager:
 {history_str}
 """
         try:
+            optimized_prompt, prompt_tokens = context_manager.truncate_text(
+                text=mining_prompt,
+                model_alias=model_alias,
+                max_output_tokens=500
+            )
+            
             response = await client.chat.completions.create(
                 model=creds["model"],
-                messages=[{"role": "system", "content": mining_prompt}],
+                messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=500,
                 temperature=0.3,
                 response_format={"type": "json_object"}
             )
             result = response.choices[0].message.content.strip()
-            data = json.loads(result)
-            slangs = data.get("slangs", data) if isinstance(data, dict) else data
+            
+            try:
+                data = json.loads(result)
+            except json.JSONDecodeError as e:
+                logger.error(f"AI 返回的 JSON 格式错误: {e}, 原始内容: {result}")
+                return
+            
+            if isinstance(data, dict):
+                slangs = data.get("slangs", data)
+            elif isinstance(data, list):
+                slangs = data
+            else:
+                logger.error(f"AI 返回的数据类型错误: {type(data)}, 原始内容: {result}")
+                return
             
             if isinstance(slangs, list):
                 for s in slangs:
-                    phrase = s.get("phrase")
-                    definition = s.get("definition")
-                    if phrase:
-                        # 记录并更新频率，同时附带当前上下文样本
-                        db_manager.update_slang_candidate(
-                            group_id, 
-                            phrase, 
-                            delta_freq=1, 
-                            definition=definition,
-                            context_samples=[history_str]
-                        )
-                        
-                        # 触发差分推理 (检查频率阈值)
-                        await self._refine_slang_definition(group_id, phrase)
+                    if isinstance(s, dict):
+                        phrase = s.get("phrase")
+                        definition = s.get("definition")
+                        if phrase:
+                            # 记录并更新频率，同时附带当前上下文样本
+                            db_manager.update_slang_candidate(
+                                group_id, 
+                                phrase, 
+                                delta_freq=1, 
+                                definition=definition,
+                                context_samples=[history_str]
+                            )
+                            
+                            # 触发差分推理 (检查频率阈值)
+                            await self._refine_slang_definition(group_id, phrase)
                         
         except Exception as e:
-            print(f"黑话挖掘失败: {e}")
+            logger.error(f"黑话挖掘失败: {e}", exc_info=True)
 
     async def _refine_slang_definition(self, group_id: int, phrase: str):
         """
@@ -328,13 +424,14 @@ class PersonalityManager:
         
         if new_stage == stage: return # 阶段未改变，暂不重推
 
-        model_alias = ai_config.reply_model
+        model_alias = ai_config.slang_mining_model or ai_config.reply_model
         creds = ai_config_manager.get_model_credentials(model_alias)
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
         
         samples_str = "\n---\n".join(candidate["context_samples"])
         
         refine_prompt = f"""
+
 你现在是 {bot_config.bot_name} 的黑话判定专家。
 我们需要对黑话词汇 "{phrase}" 进行深度定义。
 
@@ -349,16 +446,22 @@ class PersonalityManager:
 直接输出最终定义，不要包含其他文字。
 """
         try:
+            optimized_prompt, prompt_tokens = context_manager.truncate_text(
+                text=refine_prompt,
+                model_alias=model_alias,
+                max_output_tokens=200
+            )
+            
             response = await client.chat.completions.create(
                 model=creds["model"],
-                messages=[{"role": "system", "content": refine_prompt}],
+                messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=200,
                 temperature=0.2
             )
             final_def = response.choices[0].message.content.strip()
             db_manager.update_slang_candidate(group_id, phrase, delta_freq=0, stage=new_stage, definition=final_def)
         except Exception as e:
-            print(f"黑话定义修正失败: {e}")
+            logger.error(f"黑话定义修正失败: {e}", exc_info=True)
 
     async def evolve_personality(self, group_id: int, user_name: str, user_msg: str, bot_reply: str = None):
         """
@@ -401,7 +504,7 @@ class PersonalityManager:
         if not creds:
             return
 
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"])
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
         
         history_str = "\n".join(history)
         
@@ -426,16 +529,37 @@ class PersonalityManager:
 请直接输出 JSON，不要包含其他解释性文字。
 """
         try:
+            optimized_prompt, prompt_tokens = context_manager.truncate_text(
+                text=vibe_prompt,
+                model_alias=model_alias,
+                max_output_tokens=300
+            )
+            
             response = await client.chat.completions.create(
                 model=creds["model"],
-                messages=[{"role": "system", "content": vibe_prompt}],
+                messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=300,
                 temperature=0.5,
                 response_format={"type": "json_object"}
             )
             vibe_json = response.choices[0].message.content.strip()
-            db_manager.update_personality_state(group_id, vibe=vibe_json)
+            
+            # 验证并规范化 JSON 格式
+            try:
+                data = json.loads(vibe_json)
+                if isinstance(data, dict):
+                    # 确保包含必要的字段
+                    if "vibe" not in data:
+                        data["vibe"] = "正常聊天"
+                    db_manager.update_personality_state(group_id, vibe=json.dumps(data, ensure_ascii=False))
+                else:
+                    # 如果不是字典，包装成字典
+                    db_manager.update_personality_state(group_id, vibe=json.dumps({"vibe": str(data)}, ensure_ascii=False))
+            except json.JSONDecodeError:
+                # 如果解析失败，直接作为 vibe 描述存入
+                db_manager.update_personality_state(group_id, vibe=json.dumps({"vibe": vibe_json}, ensure_ascii=False))
+                
         except Exception as e:
-            print(f"更新群聊氛围失败: {e}")
+            logger.error(f"更新群聊氛围失败: {e}", exc_info=True)
 
 personality_manager = PersonalityManager()

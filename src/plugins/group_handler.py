@@ -10,13 +10,34 @@ from src.aimodel.memory.vector_db import vector_db
 from src.aimodel.memory.consolidation import consolidate_memories
 from src.aimodel.reply.personality import personality_manager
 from src.aimodel.decision.decide import should_i_reply
+from src.utils.logger import get_logger
+from src.utils.performance_monitor import ConcurrencyLimiter, RateLimiter
 import random
 import asyncio
 import time
 import re
 import datetime
 
-# 记录每个群组最后一次被“强行唤醒”的时间（如被艾特或被提及）
+logger = get_logger(__name__)
+
+# 限制并发处理的任务数，避免资源耗尽
+task_concurrency_limiter = ConcurrencyLimiter(max_concurrent=10)
+
+# 速率限制器，防止任务过多
+task_rate_limiter = RateLimiter(max_calls=50, time_window=10)
+
+async def create_limited_task(coro):
+    """
+    创建受并发和速率限制的任务
+    
+    Args:
+        coro: 协程对象
+    """
+    await task_rate_limiter.wait_for_slot()
+    async with task_concurrency_limiter:
+        return await coro
+
+# 记录每个群组最后一次被"强行唤醒"的时间（如被艾特或被提及）
 last_wake_up_times = {}
 
 def is_within_chat_time(group_id: int) -> bool:
@@ -38,11 +59,13 @@ def is_within_chat_time(group_id: int) -> bool:
         return True
         
     for item in schedule:
+        if not isinstance(item, dict):
+            continue
         start = item.get("start")
         end = item.get("end")
         can_chat = item.get("can_chat", False)
         
-        if can_chat and start <= current_time_str <= end:
+        if start and end and can_chat and start <= current_time_str <= end:
             return True
             
     return False
@@ -213,15 +236,15 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             
             # 3. 实时模仿与黑话挖掘 (采样最近 20 条历史)
             history = db_manager.get_chat_log(group_id, limit=20)
-            asyncio.create_task(personality_manager.capture_style_patterns(group_id, history))
-            asyncio.create_task(personality_manager.mine_slang(group_id, history))
+            asyncio.create_task(create_limited_task(personality_manager.capture_style_patterns(group_id, history)))
+            asyncio.create_task(create_limited_task(personality_manager.mine_slang(group_id, history)))
             
             # 4. 尝试进行记忆固化 (每 50 条消息处理一次)
             await consolidate_memories(group_id)
         except Exception as e:
-            print(f"处理背景学习逻辑失败: {e}")
+            logger.error(f"处理背景学习逻辑失败: {e}", exc_info=True)
     
-    asyncio.create_task(store_and_consolidate())
+    asyncio.create_task(create_limited_task(store_and_consolidate()))
     
     # 7. 唤醒逻辑判断
     is_at_me = "@self" in llm_text or event.is_tome()
@@ -421,7 +444,7 @@ async def process_my_logic(
             await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
     
     # 打印分类信息
-    print(f"[{role}] {card}({user_id}) [QQ昵称] 唤醒了{bot_config.bot_name}:")
-    print(f"  - 清洗后文本 (LLM): {llm_text}")
-    print(f"  - {bot_config.bot_name}回复: {reply_text}")
+    logger.info(f"[{role}] {card}({user_id}) 唤醒了{bot_config.bot_name}")
+    logger.debug(f"清洗后文本 (LLM): {llm_text}")
+    logger.debug(f"{bot_config.bot_name}回复: {reply_text}")
     

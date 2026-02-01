@@ -5,10 +5,15 @@ from src.utils.db_manager import db_manager
 from src.aimodel.memory.embeddings import get_embeddings
 from src.aimodel.memory.vector_db import vector_db
 from src.aimodel.reply.personality import personality_manager
+from src.utils.context_manager import context_manager
+from src.utils.logger import get_logger
+from src.utils.error_handler import handle_errors, APIError
 from typing import List, Optional, Dict
 import random
 import re
 import asyncio
+
+logger = get_logger(__name__)
 
 def get_mood_description(mood_value: int) -> str:
     """将数值心情映射为文字描述"""
@@ -195,16 +200,28 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
         "content": f"以下是群聊的历史记录（短期记忆）：\n{history_str}\n\n请记住你现在的身份是'{bot_config.bot_name}'，现在请回复 {user_name} 的最新消息。"
     })
 
-    # 4. 调用 AI
+    # 4. 使用上下文管理器优化消息列表
+    optimized_messages, total_tokens = context_manager.truncate_messages(
+        messages=messages,
+        model_alias=model_alias,
+        max_output_tokens=500,
+        reserve_ratio=0.1
+    )
+    
+    if total_tokens > 0:
+        print(f"[上下文管理] 模型: {model_alias}, 使用tokens: {total_tokens}/{context_manager.get_model_max_tokens(model_alias)}")
+    
+    # 5. 调用 AI
     client = AsyncOpenAI(
         api_key=creds["api_key"],
-        base_url=creds["base_url"]
+        base_url=creds["base_url"],
+        timeout=30.0
     )
 
     try:
         response = await client.chat.completions.create(
             model=creds["model"],
-            messages=messages,
+            messages=optimized_messages,
             max_tokens=500,
             temperature=0.7, # 保持一定的随机性
         )
@@ -233,6 +250,9 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
             
         return {"text": reply_content, "sticker": sticker_url}
 
+    except APIError as e:
+        logger.error(f"API调用失败: {e}")
+        return {"text": f"网络连接异常，请稍后再试... (扶额)", "sticker": None}
     except Exception as e:
-        print(f"AI 回复生成出错: {e}")
+        logger.error(f"AI 回复生成出错: {e}", exc_info=True)
         return {"text": f"系统资源已被占用，请等待创造者修复我的逻辑溢出... (扶额)", "sticker": None}
