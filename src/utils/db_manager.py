@@ -7,9 +7,16 @@ from typing import List, Tuple, Optional, Dict
 class DBManager:
     def __init__(self, db_path: str = "data/bot_data.db"):
         self.db_path = Path(db_path)
-        # 确保数据目录存在
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._init_db()
+        try:
+            # 确保数据目录存在
+            self.db_path.parent.mkdir(parents=True, exist_ok=True)
+            self._init_db()
+        except sqlite3.OperationalError as e:
+            if "unable to open database file" in str(e):
+                print(f"\n❌ ERROR: 无法打开数据库文件 '{db_path}'。")
+                print(f"这通常是由于目录权限不足导致的。")
+                print(f"提示: 请尝试运行 'sudo chown -R $USER:$USER {Path.cwd()}' 或 'chmod -R 755 data/'\n")
+            raise e
 
     def _get_connection(self):
         return sqlite3.connect(self.db_path)

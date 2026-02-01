@@ -4,8 +4,14 @@ from nonebot.message import event_preprocessor
 from nonebot.exception import IgnoredException
 from nonebot.adapters.onebot.v11 import MessageEvent, GroupMessageEvent
 import os
+import sys
 from pathlib import Path
 import shutil
+
+# 确保项目根目录在 sys.path 中，防止 Linux 下导入 src 失败
+root_path = Path(__file__).parent.absolute()
+if str(root_path) not in sys.path:
+    sys.path.insert(0, str(root_path))
 
 # 启动前检查：确保必要文件存在
 def check_essential_files():

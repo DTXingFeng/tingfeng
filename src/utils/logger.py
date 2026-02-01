@@ -15,44 +15,53 @@ class LoggerConfig:
             rotation: 日志文件轮转大小
             retention: 日志保留时间
         """
-        log_path = Path(log_dir)
-        log_path.mkdir(parents=True, exist_ok=True)
-        
-        logger.remove()
-        
-        logger.add(
-            sys.stdout,
-            format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
-            level="INFO",
-            colorize=True
-        )
-        
-        logger.add(
-            log_path / "info_{time:YYYY-MM-DD}.log",
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
-            level="INFO",
-            rotation=rotation,
-            retention=retention,
-            encoding="utf-8"
-        )
-        
-        logger.add(
-            log_path / "error_{time:YYYY-MM-DD}.log",
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
-            level="ERROR",
-            rotation=rotation,
-            retention=retention,
-            encoding="utf-8"
-        )
-        
-        logger.add(
-            log_path / "debug_{time:YYYY-MM-DD}.log",
-            format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
-            level="DEBUG",
-            rotation=rotation,
-            retention="7 days",
-            encoding="utf-8"
-        )
+        try:
+            log_path = Path(log_dir)
+            log_path.mkdir(parents=True, exist_ok=True)
+            
+            logger.remove()
+            
+            logger.add(
+                sys.stdout,
+                format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
+                level="INFO",
+                colorize=True
+            )
+            
+            logger.add(
+                log_path / "info_{time:YYYY-MM-DD}.log",
+                format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+                level="INFO",
+                rotation=rotation,
+                retention=retention,
+                encoding="utf-8"
+            )
+            
+            logger.add(
+                log_path / "error_{time:YYYY-MM-DD}.log",
+                format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+                level="ERROR",
+                rotation=rotation,
+                retention=retention,
+                encoding="utf-8"
+            )
+            
+            logger.add(
+                log_path / "debug_{time:YYYY-MM-DD}.log",
+                format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+                level="DEBUG",
+                rotation=rotation,
+                retention="7 days",
+                encoding="utf-8"
+            )
+        except PermissionError:
+            print(f"\n❌ ERROR: 无法写入日志目录 '{log_dir}'。请检查权限！")
+            print(f"提示: 请尝试运行 'sudo chown -R $USER:$USER {Path.cwd()}'\n")
+            # 在这种情况下，我们至少保留标准输出日志
+            logger.remove()
+            logger.add(sys.stdout, level="INFO", colorize=True)
+        except Exception as e:
+            print(f"\n❌ ERROR: 初始化日志系统失败: {e}\n")
 
 LoggerConfig.setup()
 
