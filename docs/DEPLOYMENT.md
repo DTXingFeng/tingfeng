@@ -22,7 +22,7 @@
 
 1. **克隆项目**
    ```bash
-   git clone https://github.com/yourusername/tingfengbot.git
+   git clone https://github.com/DTXingFeng/tingfeng.git
    cd tingfengbot
    ```
 
