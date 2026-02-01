@@ -253,6 +253,19 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
     except APIError as e:
         logger.error(f"API调用失败: {e}")
         return {"text": f"网络连接异常，请稍后再试... (扶额)", "sticker": None}
+    except asyncio.TimeoutError as e:
+        logger.error(f"AI 调用超时: {e}", exc_info=True)
+        return {"text": f"思考超时了，脑子有点卡顿... (扶额)", "sticker": None}
     except Exception as e:
-        logger.error(f"AI 回复生成出错: {e}", exc_info=True)
-        return {"text": f"系统资源已被占用，请等待创造者修复我的逻辑溢出... (扶额)", "sticker": None}
+        error_type = type(e).__name__
+        error_msg = str(e)
+        
+        if "timeout" in error_msg.lower() or "time" in error_msg.lower():
+            logger.error(f"AI 调用超时: {error_msg}", exc_info=True)
+            return {"text": f"思考超时了，脑子有点卡顿... (扶额)", "sticker": None}
+        elif "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+            logger.error(f"API 速率限制: {error_msg}", exc_info=True)
+            return {"text": f"大脑过载了，休息一下... (扶额)", "sticker": None}
+        else:
+            logger.error(f"AI 回复生成出错 [{error_type}]: {error_msg}", exc_info=True)
+            return {"text": f"系统异常，暂时无法回复... (扶额)", "sticker": None}

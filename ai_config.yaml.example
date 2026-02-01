@@ -3,7 +3,6 @@ platforms:
     base_url: "https://api.deepseek.com/v1"
     api_key: "sk-your-deepseek-api-key"
     description: "DeepSeek 官方 API"
-  # 硅基流动
   siliconflow_official:
     base_url: "https://api.siliconflow.cn/v1"
     api_key: "sk-your-siliconflow-api-key"
@@ -14,17 +13,43 @@ models:
     platform_alias: "deepseek_official"
     model_name: "deepseek-chat"
     description: "DeepSeek 官方对话模型"
+    max_context_tokens: 131072
   ds_reasoner:
     platform_alias: "deepseek_official"
     model_name: "deepseek-reasoner"
     description: "DeepSeek R1 思考模型"
+    max_context_tokens: 131072
   qwen_vl_8b:
     platform_alias: "siliconflow_official"
     model_name: "Qwen/Qwen3-VL-8B-Instruct"
-    description: "硅基流动 Qwen VL 8B 模型"
+    description: "硅基流动 Qwen3 VL 8B 模型"
+    max_context_tokens: 262144
+  qwen_7b:
+    platform_alias: "siliconflow_official"
+    model_name: "Qwen/Qwen2.5-7B-Instruct"
+    description: "Qwen 7B 模型，低成本主力模型"
+    max_context_tokens: 32768
+  bge_embedding:
+    platform_alias: "siliconflow_official"
+    model_name: "BAAI/bge-large-zh-v1.5"
+    description: "BGE 中文向量模型"
+    max_context_tokens: 1024
 
-# 功能绑定
 reply_model: "ds_chat"
 decision_model: "ds_reasoner"
-memory_model: "ds_chat"
+memory_model: "bge_embedding"
+consolidation_model: "qwen_7b"
 image_model: "qwen_vl_8b"
+inner_voice_model: "qwen_7b"
+style_mimic_model: "qwen_7b"
+slang_mining_model: "qwen_7b"
+personality_refine_model: "qwen_7b"
+dream_agent_model: "qwen_7b"
+memory_search_model: "bge_embedding"
+memory_cluster_model: "qwen_7b"
+context_summary_model: "qwen_7b"
+emotion_analysis_model: "qwen_7b"
+topic_extract_model: "qwen_7b"
+response_polish_model: "qwen_7b"
+quality_check_model: "qwen_7b"
+error_correction_model: "qwen_7b"

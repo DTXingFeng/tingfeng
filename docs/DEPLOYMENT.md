@@ -43,34 +43,41 @@
    pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
    ```
 
-4. **配置环境变量**
+4. **配置机器人人设**
+   ```bash
+   # 复制并编辑 config.yaml
+   cp config.yaml.example config.yaml
+   # 编辑 config.yaml，设置机器人人设和行为
+   ```
+
+5. **配置 AI 模型**
+   ```bash
+   # 复制并编辑 ai_config.yaml
+   cp ai_config.yaml.example ai_config.yaml
+   # 编辑 ai_config.yaml，填入你的 API Key
+   ```
+
+6. **配置环境变量**
    ```bash
    cp .env.example .env
    # 编辑 .env 文件，填入实际配置
    ```
 
-5. **配置 AI 模型**
-   ```bash
-   # 编辑 config/ai_config.yaml
-   # 填入你的 OpenAI API Key
-   ```
+7. **配置 OneBot V11**
+   1. 安装 go-cqhttp 或 NapCat
+   2. 配置 OneBot V11 正向 WebSocket 服务器
+   3. 在 `.env` 中设置：
+      ```
+      ONEBOT_WS_URLS=["ws://your-cqhttp-host:8080"]
+      ONEBOT_ACCESS_TOKEN=your-access-token
+      ```
 
-6. **运行机器人**
+8. **运行机器人**
    ```bash
    python bot.py
    ```
 
-### 配置 OneBot V11
-
-1. 安装 go-cqhttp 或 NapCat
-2. 配置 OneBot V11 正向 WebSocket 服务器
-3. 在 `.env` 中设置：
-   ```
-   ONEBOT_WS_URL=ws://your-cqhttp-host:8080
-   ONEBOT_ACCESS_TOKEN=your-access-token
-   ```
-
-## Docker 部署
+### Docker 部署
 
 ### 前置要求
 
@@ -91,7 +98,8 @@ docker run -d \
   -p 8080:8080 \
   -v $(pwd)/data:/app/data \
   -v $(pwd)/logs:/app/logs \
-  -v $(pwd)/config:/app/config \
+  -v $(pwd)/config.yaml:/app/config.yaml \
+  -v $(pwd)/ai_config.yaml:/app/ai_config.yaml \
   -v $(pwd)/stickers:/app/stickers \
   --env-file .env \
   tingfengbot:latest
@@ -162,7 +170,8 @@ deploy:
 数据会自动持久化到以下卷：
 - `./data` - 数据库文件
 - `./logs` - 日志文件
-- `./config` - 配置文件
+- `./config.yaml` - 机器人人设配置
+- `./ai_config.yaml` - AI模型配置
 - `./stickers` - 表情包文件
 
 #### 网络配置
@@ -205,7 +214,7 @@ mkdir -p backup
 # 备份数据
 tar -czf backup/data_$(date +%Y%m%d).tar.gz data/
 tar -czf backup/logs_$(date +%Y%m%d).tar.gz logs/
-tar -czf backup/config_$(date +%Y%m%d).tar.gz config/
+tar -czf backup/config_$(date +%Y%m%d).tar.gz config.yaml ai_config.yaml
 ```
 
 #### 恢复
@@ -229,75 +238,29 @@ docker-compose up -d
 
 | 变量名 | 说明 | 示例 |
 |--------|------|------|
-| `OPENAI_API_KEY` | OpenAI API 密钥 | `sk-...` |
-| `ONEBOT_WS_URL` | OneBot WebSocket 地址 | `ws://localhost:8080` |
-| `SUPERUSERS` | 超级用户 QQ 号列表 | `["123456789"]` |
+| `ONEBOT_WS_URLS` | OneBot WebSocket 地址列表（JSON 数组） | `["ws://localhost:8080"]` |
 
 ### 可选配置
 
 #### NoneBot 配置
 
 ```bash
-HOST=0.0.0.0           # 监听地址
-PORT=8080              # 监听端口
-LOG_LEVEL=INFO         # 日志级别
-COMMAND_START=["", "/"]  # 命令前缀
-COMMAND_SEP=["."]      # 命令分隔符
+DRIVER=~websockets                        # 驱动类型
+HOST=0.0.0.0                             # 监听地址
+PORT=8080                                # 监听端口
+LOG_LEVEL=INFO                           # 日志级别
 ```
 
-#### OpenAI 配置
+#### OneBot 配置
 
 ```bash
-OPENAI_BASE_URL=https://api.openai.com/v1  # API 基础 URL
-OPENAI_TIMEOUT=120                         # 请求超时（秒）
-```
-
-#### 数据库配置
-
-```bash
-DB_PATH=/app/data/tingfengbot.db           # SQLite 数据库路径
-CHROMA_DB_PATH=/app/data/chroma            # ChromaDB 路径
-```
-
-#### 日志配置
-
-```bash
-LOG_DIR=/app/logs                          # 日志目录
-LOG_ROTATION=10 MB                         # 日志轮转大小
-LOG_RETENTION=30 days                      # 日志保留时间
-```
-
-#### 性能配置
-
-```bash
-MAX_CONCURRENT_TASKS=10                    # 最大并发任务数
-MAX_CONSOLIDATION_CONCURRENT=3             # 最大记忆固化并发数
-MESSAGE_RATE_LIMIT=50                      # 消息速率限制（次）
-MESSAGE_RATE_WINDOW=10                     # 速率限制时间窗口（秒）
-```
-
-#### 安全配置
-
-```bash
-ENABLE_INPUT_VALIDATION=true               # 启用输入验证
-ENABLE_RATE_LIMITING=true                  # 启用速率限制
-MAX_MESSAGE_LENGTH=5000                    # 最大消息长度
-```
-
-#### 机器人配置
-
-```bash
-BOT_NAME=听风                              # 机器人名称
-BOT_ROLE=AI助手                           # 机器人角色
-INITIAL_MOOD=0.5                          # 初始心情值
+ONEBOT_ACCESS_TOKEN=your-access-token      # OneBot 访问令牌（可选）
 ```
 
 #### Docker 配置
 
 ```bash
-TZ=Asia/Shanghai                          # 时区
-PUID=1000                                 # 用户 ID
-PGID=1000                                 # 组 ID
+TZ=Asia/Shanghai                         # 时区
 ```
 
 ## 数据库维护
@@ -486,7 +449,8 @@ docker logs tingfengbot
 
 # 检查配置文件
 docker exec tingfengbot cat .env
-docker exec tingfengbot cat config/ai_config.yaml
+docker exec tingfengbot cat /app/config.yaml
+docker exec tingfengbot cat /app/ai_config.yaml
 
 # 检查文件权限
 docker exec tingfengbot ls -la /app
@@ -494,8 +458,8 @@ docker exec tingfengbot ls -la /app
 
 **可能原因**：
 - `.env` 文件配置错误
-- `ai_config.yaml` 文件缺失或格式错误
-- OpenAI API Key 无效
+- `config.yaml` 或 `ai_config.yaml` 文件缺失或格式错误
+- AI API Key 无效
 - 文件权限问题
 
 #### 2. 无法连接到 OneBot
@@ -517,22 +481,22 @@ wscat -c ws://your-onebot-host:8080
 
 #### 3. API 调用失败
 
-**症状**：日志显示 OpenAI API 错误
+**症状**：日志显示 AI API 错误
 
 **排查步骤**：
 ```bash
-# 测试 API 连接
-curl -X POST https://api.openai.com/v1/chat/completions \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"model":"gpt-4","messages":[{"role":"user","content":"test"}]}'
+# 检查 AI 配置
+docker exec tingfengbot cat /app/ai_config.yaml
+
+# 查看容器日志中的详细错误信息
+docker logs tingfengbot | grep -i error
 ```
 
 **解决方案**：
-- 验证 `OPENAI_API_KEY` 是否有效
+- 检查 `ai_config.yaml` 中的 API Key 是否正确
+- 检查 API 平台是否可用
 - 检查 API 配额是否充足
-- 检查 `OPENAI_BASE_URL` 配置
-- 增加超时时间 `OPENAI_TIMEOUT`
+- 检查 `base_url` 配置是否正确
 
 #### 4. 内存占用过高
 

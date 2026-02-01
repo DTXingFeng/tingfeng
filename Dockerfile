@@ -30,8 +30,8 @@ RUN pip install --upgrade pip && \
 # 复制项目文件
 COPY src/ ./src/
 COPY bot.py ./
-COPY config/ ./config/
-COPY stickers/ ./stickers/
+COPY config.yaml.example ./config.yaml
+COPY ai_config.yaml.example ./ai_config.yaml
 
 # 创建必要的目录
 RUN mkdir -p /app/data /app/logs /app/stickers
