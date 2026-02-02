@@ -8,10 +8,12 @@ from src.aimodel.reply.personality import personality_manager
 from src.utils.context_manager import context_manager
 from src.utils.logger import get_logger
 from src.utils.error_handler import handle_errors, APIError
-from typing import List, Optional, Dict
+from src.mcp.registry import tool_registry
+from typing import List, Optional, Dict, Any
 import random
 import re
 import asyncio
+import json
 
 logger = get_logger(__name__)
 
@@ -226,7 +228,7 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
     if total_tokens > 0:
         print(f"[上下文管理] 模型: {model_alias}, 使用tokens: {total_tokens}/{context_manager.get_model_max_tokens(model_alias)}")
     
-    # 5. 调用 AI
+    # 5. 调用 AI（支持 MCP function calling）
     client = AsyncOpenAI(
         api_key=creds["api_key"],
         base_url=creds["base_url"],
@@ -234,14 +236,69 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
     )
 
     try:
-        response = await client.chat.completions.create(
-            model=creds["model"],
-            messages=optimized_messages,
-            max_tokens=500,
-            temperature=0.7, # 保持一定的随机性
-        )
+        # 获取 MCP 工具定义
+        mcp_functions = tool_registry.get_all_definitions()
+        
+        # 如果有 MCP 工具，启用 function calling
+        if mcp_functions:
+            response = await client.chat.completions.create(
+                model=creds["model"],
+                messages=optimized_messages,
+                functions=mcp_functions,
+                function_call="auto",  # 让 LLM 自动决定是否调用工具
+                max_tokens=500,
+                temperature=0.7
+            )
+        else:
+            response = await client.chat.completions.create(
+                model=creds["model"],
+                messages=optimized_messages,
+                max_tokens=500,
+                temperature=0.7
+            )
         
         reply_content = response.choices[0].message.content.strip()
+        
+        # 处理 function call
+        function_call = response.choices[0].message.function_call
+        if function_call:
+            tool_name = function_call.name
+            tool_args = function_call.arguments
+            
+            logger.info(f"LLM 调用工具: {tool_name}, 参数: {tool_args}")
+            
+            # 解析参数
+            import json
+            try:
+                if isinstance(tool_args, str):
+                    tool_args = json.loads(tool_args)
+            except json.JSONDecodeError:
+                logger.error(f"工具参数解析失败: {tool_args}")
+                tool_args = {}
+            
+            # 执行工具
+            tool_result = await tool_registry.execute(tool_name, **tool_args)
+            
+            if tool_result["success"]:
+                logger.info(f"工具 {tool_name} 执行成功: {tool_result['data']}")
+                
+                # 将工具结果返回给 LLM，让它继续对话
+                tool_result_message = {
+                    "role": "system",
+                    "content": f"### 工具执行结果（{tool_name}）：\n{json.dumps(tool_result['data'], ensure_ascii=False)}"
+                }
+                
+                # 再次调用 LLM，包含工具结果
+                response = await client.chat.completions.create(
+                    model=creds["model"],
+                    messages=optimized_messages + [tool_result_message],
+                    max_tokens=500,
+                    temperature=0.7
+                )
+                reply_content = response.choices[0].message.content.strip()
+            else:
+                logger.error(f"工具 {tool_name} 执行失败: {tool_result['error']}")
+                reply_content = f"工具调用失败了...（扶额）"
         
         # 1. 提取并处理表情包标签
         sticker_url = None

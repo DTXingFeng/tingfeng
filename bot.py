@@ -45,6 +45,16 @@ nonebot.load_builtin_plugins("echo")
 # 加载自定义插件目录
 nonebot.load_plugins("src/plugins")
 
+# 加载 MCP 工具
+@driver.on_startup
+async def load_mcp_tools():
+    """Bot 启动时加载所有 MCP 工具"""
+    try:
+        from src.mcp.loader import load_all_tools
+        await load_all_tools()
+    except Exception as e:
+        print(f"加载 MCP 工具失败: {e}")
+
 # 初始化创造者记忆
 @driver.on_startup
 async def init_creator_memory():

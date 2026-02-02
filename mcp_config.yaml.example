@@ -1,0 +1,48 @@
+# MCP 配置文件示例
+
+mcp:
+  # 是否启用 MCP 功能
+  enabled: true
+  
+  # 工具调用配置
+  execution:
+    # 单个工具超时时间（秒）
+    timeout: 10
+    # 最大并发执行数
+    max_concurrent: 5
+    # 是否缓存结果
+    cache_enabled: true
+    # 缓存过期时间（秒）
+    cache_ttl: 300
+  
+  # 工具启用控制（可以禁用某些工具）
+  tools:
+    # 记忆工具
+    memory_search: true
+    get_user_memories: true
+    add_memory: true
+    
+    # 用户工具
+    get_user_profile: true
+    get_creator_info: true
+    update_relationship: true
+    
+    # 知识工具
+    knowledge_query: true
+    get_creator_knowledge: true
+    add_knowledge: true
+    
+    # 实用工具
+    get_current_time: true
+    is_within_schedule: true
+    format_text: true
+    count_words: true
+  
+  # 安全配置
+  security:
+    # 是否启用调用频率限制
+    rate_limit_enabled: true
+    # 每分钟最大调用次数
+    max_calls_per_minute: 30
+    # 是否记录所有工具调用
+    log_all_calls: true
