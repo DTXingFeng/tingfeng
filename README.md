@@ -45,6 +45,12 @@
 - 🛡️ **群组管理**：
   - 完善的白名单/黑名单过滤机制。
 
+- 🔧 **MCP 工具调用能力 (Model Context Protocol)**：
+  - **智能工具调用**：集成 OpenAI Function Calling，LLM 可根据需求自动调用工具。
+  - **13+ 内置工具**：记忆搜索、用户画像、知识图谱查询、时间工具等开箱即用。
+  - **易于扩展**：基于 BaseTool 的统一接口，快速添加自定义工具。
+  - **兼容多平台**：支持 DeepSeek、GPT-4 等支持 tool calling 的模型。
+
 ## 📁 项目结构
 
 ```
@@ -55,6 +61,11 @@ tingfengbot/
 │   │   ├── image_processing/ # VLM 图像识别与处理
 │   │   ├── memory/        # 向量库、记忆固化与 Embedding
 │   │   └── reply/         # 核心回复生成逻辑
+│   ├── mcp/               # MCP 工具调用系统
+│   │   ├── tools/         # 内置工具集（记忆/用户/知识/实用）
+│   │   ├── base_tool.py   # 工具基类
+│   │   ├── registry.py    # 工具注册中心
+│   │   └── loader.py      # 工具加载器
 │   ├── config/            # 机器人与 AI 模型配置解析
 │   ├── plugins/           # NoneBot 插件 (业务核心)
 │   └── utils/             # 数据库管理 (SQLite) 与消息清洗
@@ -99,3 +110,54 @@ python bot.py
 - 本项目默认不响应私聊消息。
 - 请确保你的 API Key 余额充足，建议使用硅基流动等高性价比平台。
 - 包含密钥的 `*.yaml` 和 `data/` 目录已被加入 `.gitignore`，请放心开发。
+
+## 🔌 MCP 工具开发
+
+### 内置工具列表
+
+**记忆类**：
+- `memory_search` - 搜索长期记忆（向量数据库）
+- `get_user_memories` - 获取用户具体记忆
+- `add_memory` - 主动添加记忆
+
+**用户类**：
+- `get_user_profile` - 获取用户完整画像
+- `get_creator_info` - 获取创造者信息
+- `update_relationship` - 更新关系状态
+
+**知识类**：
+- `knowledge_query` - 查询知识图谱
+- `get_creator_knowledge` - 查询创造者知识
+- `add_knowledge` - 添加知识三元组
+
+**实用类**：
+- `get_current_time` - 获取当前时间
+- `is_within_schedule` - 检查作息表
+- `format_text` - 文本格式化
+- `count_words` - 字数统计
+
+### 自定义工具开发
+
+```python
+from src.mcp.base_tool import BaseTool
+from src.mcp.registry import tool_registry
+
+class MyCustomTool(BaseTool):
+    name = "my_tool"
+    description = "我的自定义工具"
+    parameters = {
+        "input": {
+            "type": "string",
+            "description": "输入内容",
+            "required": True
+        }
+    }
+    
+    async def execute(self, input: str):
+        return {"result": f"处理了: {input}"}
+
+# 注册工具
+tool_registry.register(MyCustomTool())
+```
+
+更多详细信息请参阅 [src/mcp/README.md](src/mcp/README.md)
