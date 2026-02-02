@@ -236,6 +236,13 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     msg_to_store = f"{display_name}:{llm_text}"
     db_manager.add_chat_log(group_id, msg_to_store)
     
+    # 6.5 确保群组中存在创造者的记忆
+    try:
+        from src.utils.init_memory import ensure_creator_memory
+        asyncio.create_task(create_limited_task(ensure_creator_memory(group_id)))
+    except Exception as e:
+        logger.debug(f"确保创造者记忆时出错: {e}")
+    
     # 更新用户名与 ID 的映射，用于后续艾特功能
     # 同时存储群名片和 QQ 昵称，增加匹配成功率
     db_manager.update_user_id_map(group_id, nickname, user_id)

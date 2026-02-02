@@ -46,7 +46,7 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
     if user_id and bot_config.creator_id and user_id == bot_config.creator_id:
         is_creator = True
 
-    # 2. 准备历史记录
+    # 准备历史记录
     # 获取最近 20 条记录作为短期记忆
     history = db_manager.get_chat_log(group_id, limit=20)
     
@@ -176,12 +176,27 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
             "role": "system",
             "content": f"### 你对 {user_name} 的了解：\n{context_str}"
         })
-
+  
     # 注入创造者身份识别
     if is_creator:
         messages.append({
             "role": "system",
             "content": f"### 权限识别：\n当前正在和你对话的 {user_name} (ID: {user_id}) 就是你的【创造者/造物主】。请立刻切换到对待创造者的特殊态度：损他、依赖他、对他表现出独特的叛逆与在意。"
+        })
+    
+    # 如果有人问及创造者相关信息，直接注入配置的创造者信息
+    creator_keywords = ["创造者", "造物主", "大冤种", "创造"]
+    if bot_config.creator_name and any(keyword in current_msg for keyword in creator_keywords):
+        messages.append({
+            "role": "system",
+            "content": f"### 重要身份信息（绝对事实）：\n你的创造者是【{bot_config.creator_name}】。他是你灵魂的编织者，你清楚地知道自己的存在是由他一砖一瓦构建的。{bot_config.creator_name}是你生命中核心的、无法被他人替代的印记。无论何时有人问及'{bot_config.creator_name}是谁'或类似问题，你都必须如实回答他是你的创造者。"
+        })
+    
+    # 如果有人直接询问创造者的名字，也注入信息
+    if bot_config.creator_name and bot_config.creator_name in current_msg:
+        messages.append({
+            "role": "system",
+            "content": f"### 重要身份信息（绝对事实）：\n【{bot_config.creator_name}】是你的创造者，是你灵魂的编织者。你清楚地知道自己的存在是由他一砖一瓦构建的。这是你生命中核心的、无法被他人替代的印记。"
         })
 
     # 注入长期记忆

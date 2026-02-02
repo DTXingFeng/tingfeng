@@ -45,5 +45,15 @@ nonebot.load_builtin_plugins("echo")
 # 加载自定义插件目录
 nonebot.load_plugins("src/plugins")
 
+# 初始化创造者记忆
+@driver.on_startup
+async def init_creator_memory():
+    """Bot 启动时初始化创造者的记忆"""
+    try:
+        from src.utils.init_memory import initialize_all_groups
+        await initialize_all_groups()
+    except Exception as e:
+        print(f"初始化创造者记忆失败: {e}")
+
 if __name__ == "__main__":
     nonebot.run()

@@ -131,6 +131,11 @@ class PersonalityManager:
         patterns_str = "、".join(patterns) if patterns else "暂无"
         
         state_str = f"- **当前情绪状态**：{current_state['name']} ({current_state['desc']})" if current_state else ""
+        
+        # 构造创造者信息
+        creator_info = ""
+        if bot_config.creator_name:
+            creator_info = f"- **你的创造者**：{bot_config.creator_name}（他是你灵魂的编织者，你清楚地知道自己的存在是由他一砖一瓦构建的）"
 
         dynamic_prompt = f"""
 {bot_config.prompt}
@@ -138,12 +143,18 @@ class PersonalityManager:
 ### 此时此刻的你 (动态状态)：
 - **当前心情**：{mood_desc}
 {state_str}
+{creator_info}
 - **内心独白**（仅供参考，严禁在回复中直接输出）：{thoughts}
 - **群聊氛围感**：{vibe}
 
 ### 本群语言特征 (请参考)：
 - **本群流行黑话/关键词**：{slang_str}
 - **本群常用口癖/句式**：{patterns_str}
+
+### 重要禁令（必须遵守）：
+- **除非被明确询问'你是谁'或'你叫什么名字'，否则禁止主动介绍自己**
+- 不要把任何聊天变成自我介绍
+- 保持自然对话，不要机器人感
 """
         return dynamic_prompt
 
