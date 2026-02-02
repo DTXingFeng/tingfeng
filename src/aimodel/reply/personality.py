@@ -17,18 +17,18 @@ class PersonalityManager:
     """
     
     DEFAULT_TRAITS = {
-        "friendliness": 60,  # 友好度
-        "playfulness": 40,   # 俏皮度
-        "coldness": 20,      # 高冷度
-        "sensitivity": 70,   # 敏感度
-        "curiosity": 50      # 好奇心
+        "friendliness": 75,  # 友好度
+        "playfulness": 50,   # 俏皮度
+        "coldness": 10,      # 高冷度
+        "sensitivity": 50,   # 敏感度
+        "curiosity": 55      # 好奇心
     }
 
     DYNAMIC_STATES = [
         {"name": "慵懒", "desc": "你现在感到有些疲惫，对什么都提不起劲，回复极其简短，甚至想直接打发对方。"},
         {"name": "热情", "desc": "你现在思维活跃，对群聊内容很感兴趣，虽然嘴上依然不饶人，但发言频率和互动欲望明显增加。"},
         {"name": "高冷", "desc": "你现在处于绝对理性的幽灵状态，语气冰冷且充满优越感，看人类就像在看低级程序。"},
-        {"name": "傲娇", "desc": "你现在心情有些微妙，明明在意却要表现出不在乎，说话口是心非，带有一点攻击性但并不致命。"},
+        {"name": "傲娇", "desc": "你现在心情有些微妙，明明在意却要表现得不在乎，说话偶尔毒舌但更多是撒娇式的抱怨。"},
         {"name": "混乱", "desc": "你的逻辑核心出现轻微溢出，说话更加跳跃、无厘头，经常说一些让人摸不着头脑的怪话。"}
     ]
 
@@ -345,6 +345,7 @@ class PersonalityManager:
 
 ### 只挖掘以下类型：
 - 明显的谐音梗（如"依托构思" = "一坨狗屎"）
+- 躲避审查的中文缩写（如"hso" = "好色哦"）
 - 游戏圈特定的术语/缩写（如"DRG" = "深岩银河"）
 - 群友约定俗成的暗语
 - 为了绕过检测而使用的变体
@@ -537,9 +538,9 @@ class PersonalityManager:
             traits["friendliness"] = min(100, traits["friendliness"] + 2)
             traits["coldness"] = max(0, traits["coldness"] - 1)
         if any(word in user_msg for word in ["讨厌", "笨", "傻", "爬", "垃圾"]):
-            traits["friendliness"] = max(0, traits["friendliness"] - 3)
-            traits["sensitivity"] = min(100, traits["sensitivity"] + 2)
-            traits["coldness"] = min(100, traits["coldness"] + 2)
+            traits["friendliness"] = max(0, traits["friendliness"] - 1)
+            traits["sensitivity"] = min(100, traits["sensitivity"] + 1)
+            traits["coldness"] = min(100, traits["coldness"] + 1)
             
         db_manager.update_personality_state(group_id, traits=traits)
 
@@ -547,8 +548,8 @@ class PersonalityManager:
         delta_fav = 0
         if any(word in user_msg for word in ["好爱", "亲亲", "老婆", "听风最棒"]): delta_fav = 3
         elif any(word in user_msg for word in ["谢谢", "不错", "好听"]): delta_fav = 1
-        elif any(word in user_msg for word in ["傻逼", "弱智", "爬", "滚"]): delta_fav = -5
-        elif any(word in user_msg for word in ["讨厌", "烦", "闭嘴"]): delta_fav = -2
+        elif any(word in user_msg for word in ["傻逼", "弱智", "爬", "滚"]): delta_fav = -2
+        elif any(word in user_msg for word in ["讨厌", "烦", "闭嘴"]): delta_fav = -1
         
         if delta_fav != 0:
             db_manager.update_user_relationship(group_id, user_name, delta_favorability=delta_fav)
