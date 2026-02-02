@@ -84,6 +84,18 @@ class BaseTool(ABC):
         Returns:
             dict: 符合 OpenAI function calling 规范的定义
         """
+        properties = {}
+        required = []
+        
+        for param_name, param_def in self.parameters.items():
+            properties[param_name] = {
+                "type": param_def.get("type", "string"),
+                "description": param_def.get("description", "")
+            }
+            
+            if param_def.get("required", False):
+                required.append(param_name)
+        
         return {
             "type": "function",
             "function": {
@@ -91,7 +103,8 @@ class BaseTool(ABC):
                 "description": self.description,
                 "parameters": {
                     "type": "object",
-                    "properties": self.parameters
+                    "properties": properties,
+                    "required": required
                 }
             }
         }

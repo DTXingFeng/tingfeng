@@ -237,15 +237,15 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
 
     try:
         # 获取 MCP 工具定义
-        mcp_functions = tool_registry.get_all_definitions()
+        mcp_tools = tool_registry.get_all_definitions()
         
-        # 如果有 MCP 工具，启用 function calling
-        if mcp_functions:
+        # 如果有 MCP 工具，启用 tool calling
+        if mcp_tools:
             response = await client.chat.completions.create(
                 model=creds["model"],
                 messages=optimized_messages,
-                functions=mcp_functions,
-                function_call="auto",  # 让 LLM 自动决定是否调用工具
+                tools=mcp_tools,
+                tool_choice="auto",  # 让 LLM 自动决定是否调用工具
                 max_tokens=500,
                 temperature=0.7
             )
@@ -257,48 +257,51 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
                 temperature=0.7
             )
         
-        reply_content = response.choices[0].message.content.strip()
+        reply_content = response.choices[0].message.content or ""
+        reply_content = reply_content.strip()
         
-        # 处理 function call
-        function_call = response.choices[0].message.function_call
-        if function_call:
-            tool_name = function_call.name
-            tool_args = function_call.arguments
-            
-            logger.info(f"LLM 调用工具: {tool_name}, 参数: {tool_args}")
-            
-            # 解析参数
-            import json
-            try:
-                if isinstance(tool_args, str):
-                    tool_args = json.loads(tool_args)
-            except json.JSONDecodeError:
-                logger.error(f"工具参数解析失败: {tool_args}")
-                tool_args = {}
-            
-            # 执行工具
-            tool_result = await tool_registry.execute(tool_name, **tool_args)
-            
-            if tool_result["success"]:
-                logger.info(f"工具 {tool_name} 执行成功: {tool_result['data']}")
+        # 处理 tool calls
+        tool_calls = response.choices[0].message.tool_calls
+        if tool_calls:
+            for tool_call in tool_calls:
+                tool_name = tool_call.function.name
+                tool_args = tool_call.function.arguments
                 
-                # 将工具结果返回给 LLM，让它继续对话
-                tool_result_message = {
-                    "role": "system",
-                    "content": f"### 工具执行结果（{tool_name}）：\n{json.dumps(tool_result['data'], ensure_ascii=False)}"
-                }
+                logger.info(f"LLM 调用工具: {tool_name}, 参数: {tool_args}")
                 
-                # 再次调用 LLM，包含工具结果
-                response = await client.chat.completions.create(
-                    model=creds["model"],
-                    messages=optimized_messages + [tool_result_message],
-                    max_tokens=500,
-                    temperature=0.7
-                )
-                reply_content = response.choices[0].message.content.strip()
-            else:
-                logger.error(f"工具 {tool_name} 执行失败: {tool_result['error']}")
-                reply_content = f"工具调用失败了...（扶额）"
+                # 解析参数
+                import json
+                try:
+                    if isinstance(tool_args, str):
+                        tool_args = json.loads(tool_args)
+                except json.JSONDecodeError:
+                    logger.error(f"工具参数解析失败: {tool_args}")
+                    tool_args = {}
+                
+                # 执行工具
+                tool_result = await tool_registry.execute(tool_name, **tool_args)
+                
+                if tool_result["success"]:
+                    logger.info(f"工具 {tool_name} 执行成功: {tool_result['data']}")
+                    
+                    # 将工具结果返回给 LLM，让它继续对话
+                    tool_result_message = {
+                        "role": "system",
+                        "content": f"### 工具执行结果（{tool_name}）：\n{json.dumps(tool_result['data'], ensure_ascii=False)}"
+                    }
+                    
+                    # 再次调用 LLM，包含工具结果
+                    response = await client.chat.completions.create(
+                        model=creds["model"],
+                        messages=optimized_messages + [tool_result_message],
+                        max_tokens=500,
+                        temperature=0.7
+                    )
+                    reply_content = response.choices[0].message.content or ""
+                    reply_content = reply_content.strip()
+                else:
+                    logger.error(f"工具 {tool_name} 执行失败: {tool_result['error']}")
+                    reply_content = f"工具调用失败了...（扶额）"
         
         # 1. 提取并处理表情包标签
         sticker_url = None
