@@ -12,11 +12,11 @@ from src.config.config import bot_config
 class UserProfileTool(BaseTool):
     """
     用户画像查询工具
-    快速获取某个群友的完整画像
+    快速获取某个群友的完整画像（跨群查询）
     """
     
     name = "get_user_profile"
-    description = "获取某个群友的完整画像，包括整体印象、关系状态、好感度等"
+    description = "获取某个群友的完整画像，包括整体印象、关系状态、好感度等。注意：支持跨群查询，会通过 QQ 号聚合该用户在所有群组的数据。"
     parameters = {
         "user_name": {
             "type": "string",
@@ -41,14 +41,14 @@ class UserProfileTool(BaseTool):
         Returns:
             dict: 用户画像信息
         """
-        # 获取用户印象
-        impression = db_manager.get_user_impression(group_id, user_name)
+        # 获取用户印象（跨群查询）
+        impression = db_manager.get_user_impression_cross_group(group_id, user_name)
         
-        # 获取关系
-        relationship = db_manager.get_user_relationship(group_id, user_name)
+        # 获取关系（跨群查询）
+        relationship = db_manager.get_user_relationship_cross_group(group_id, user_name)
         
-        # 获取记忆数量
-        memories = db_manager.get_user_specific_memories(group_id, user_name, limit=100)
+        # 获取记忆数量（跨群查询）
+        memories = db_manager.get_user_specific_memories_cross_group(group_id, user_name, limit=100)
         
         # 获取用户 ID（如果有）
         user_id = db_manager.get_user_id_by_name(group_id, user_name)

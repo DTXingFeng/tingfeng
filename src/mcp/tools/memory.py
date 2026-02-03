@@ -68,11 +68,11 @@ class MemorySearchTool(BaseTool):
 class GetUserMemoriesTool(BaseTool):
     """
     获取用户特定记忆工具
-    获取某个群友的具体记忆
+    获取某个群友的具体记忆（跨群查询，通过 QQ 号聚合所有群的记忆）
     """
     
     name = "get_user_memories"
-    description = "获取某个群友在 bot 记忆中的具体信息（印象、记忆点、关系等）"
+    description = "获取某个群友在 bot 记忆中的具体信息（印象、记忆点、关系等）。注意：支持跨群查询，会通过 QQ 号聚合该用户在所有群组的记忆。"
     parameters = {
         "user_name": {
             "type": "string",
@@ -103,14 +103,14 @@ class GetUserMemoriesTool(BaseTool):
         Returns:
             dict: 用户记忆信息
         """
-        # 获取用户印象
-        impression = db_manager.get_user_impression(group_id, user_name)
+        # 获取用户印象（跨群查询）
+        impression = db_manager.get_user_impression_cross_group(group_id, user_name)
         
-        # 获取具体记忆点
-        memories = db_manager.get_user_specific_memories(group_id, user_name, limit=memory_limit)
+        # 获取具体记忆点（跨群查询）
+        memories = db_manager.get_user_specific_memories_cross_group(group_id, user_name, limit=memory_limit)
         
-        # 获取关系状态
-        relationship = db_manager.get_user_relationship(group_id, user_name)
+        # 获取关系状态（跨群查询）
+        relationship = db_manager.get_user_relationship_cross_group(group_id, user_name)
         
         return {
             "user_name": user_name,

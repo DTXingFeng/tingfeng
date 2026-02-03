@@ -610,6 +610,139 @@ class DBManager:
             cursor.execute(query, tuple(params))
             return [{"subject": row[0], "predicate": row[1], "object": row[2], "confidence": row[3]} for row in cursor.fetchall()]
 
+    # 跨群用户查询方法
+    def get_all_names_for_user(self, group_id: int, user_name: str) -> List[str]:
+        """
+        获取用户在所有群组中的名字（通过 QQ 号关联）
+        
+        Args:
+            group_id: 当前群组 ID
+            user_name: 用户名
+            
+        Returns:
+            该用户在所有群组中的名字列表
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 先获取当前用户的 QQ 号
+            cursor.execute(
+                "SELECT user_id FROM user_mapping WHERE group_id = ? AND user_name = ?",
+                (group_id, user_name)
+            )
+            row = cursor.fetchone()
+            
+            if row and row[0]:
+                # 使用 QQ 号查找所有群组中的名字
+                user_id = row[0]
+                cursor.execute(
+                    "SELECT DISTINCT user_name FROM user_mapping WHERE user_id = ?",
+                    (user_id,)
+                )
+                return [r[0] for r in cursor.fetchall()]
+            
+            # 如果没有 QQ 号，只返回当前名字
+            return [user_name]
+
+    def get_user_impression_cross_group(self, group_id: int, user_name: str) -> Optional[str]:
+        """
+        获取用户印象（跨群查询）
+        
+        通过 QQ 号关联，聚合该用户在所有群组的印象
+        
+        Args:
+            group_id: 当前群组 ID
+            user_name: 用户名
+            
+        Returns:
+            用户印象文本（聚合后的）
+        """
+        all_names = self.get_all_names_for_user(group_id, user_name)
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 查询该用户所有名字的印象
+            placeholders = ','.join(['?' for _ in all_names])
+            cursor.execute(
+                f"SELECT impression FROM user_profiles WHERE user_name IN ({placeholders}) ORDER BY updated_at DESC",
+                all_names
+            )
+            
+            rows = cursor.fetchall()
+            if rows:
+                # 返回最新的印象
+                return rows[0][0] if rows[0] else None
+            
+            return None
+
+    def get_user_specific_memories_cross_group(self, group_id: int, user_name: str, limit: int = 5) -> List[str]:
+        """
+        获取用户具体记忆（跨群查询）
+        
+        通过 QQ 号关联，聚合该用户在所有群组的记忆
+        
+        Args:
+            group_id: 当前群组 ID
+            user_name: 用户名
+            limit: 返回数量限制
+            
+        Returns:
+            记忆内容列表（按时间倒序）
+        """
+        all_names = self.get_all_names_for_user(group_id, user_name)
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 查询该用户所有名字的记忆
+            placeholders = ','.join(['?' for _ in all_names])
+            cursor.execute(
+                f"SELECT content FROM user_memories WHERE user_name IN ({placeholders}) ORDER BY created_at DESC LIMIT ?",
+                all_names + [limit]
+            )
+            
+            return [row[0] for row in cursor.fetchall()]
+
+    def get_user_relationship_cross_group(self, group_id: int, user_name: str) -> Dict[str, any]:
+        """
+        获取用户关系（跨群查询）
+        
+        通过 QQ 号关联，计算该用户在所有群组的平均好感度和最常见关系状态
+        
+        Args:
+            group_id: 当前群组 ID
+            user_name: 用户名
+            
+        Returns:
+            包含 favorability 和 status 的字典
+        """
+        all_names = self.get_all_names_for_user(group_id, user_name)
+        
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            
+            # 查询该用户所有名字的关系数据
+            placeholders = ','.join(['?' for _ in all_names])
+            cursor.execute(
+                f"SELECT favorability, status FROM user_relationships WHERE user_name IN ({placeholders})",
+                all_names
+            )
+            
+            rows = cursor.fetchall()
+            if rows:
+                # 计算平均好感度
+                avg_fav = int(sum(r[0] for r in rows) / len(rows))
+                
+                # 获取最常见的关系状态
+                from collections import Counter
+                status_counter = Counter(r[1] for r in rows)
+                most_common_status = status_counter.most_common(1)[0][0]
+                
+                return {"favorability": avg_fav, "status": most_common_status}
+            
+            return {"favorability": 50, "status": "陌生人"}
+
     def get_db_stats(self) -> Dict[str, int]:
         """获取数据库统计信息"""
         with self._get_connection() as conn:

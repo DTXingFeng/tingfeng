@@ -69,11 +69,13 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
     
     # 获取相关长期记忆 (RAG)
     long_term_memories = []
-    user_profile = db_manager.get_user_impression(group_id, user_name)
-    user_specific_memories = db_manager.get_user_specific_memories(group_id, user_name, limit=5)
     
-    # 获取用户关系 (Favorability & Status)
-    rel_data = db_manager.get_user_relationship(group_id, user_name)
+    # 获取用户画像和具体记忆（使用跨群查询）
+    user_profile = db_manager.get_user_impression_cross_group(group_id, user_name)
+    user_specific_memories = db_manager.get_user_specific_memories_cross_group(group_id, user_name, limit=5)
+    
+    # 获取关系状态（使用跨群查询）
+    rel_data = db_manager.get_user_relationship_cross_group(group_id, user_name)
     rel_status = rel_data["status"]
     rel_fav = rel_data["favorability"]
     
