@@ -12,6 +12,7 @@ from src.aimodel.reply.personality import personality_manager
 from src.aimodel.decision.decide import should_i_reply
 from src.utils.logger import get_logger
 from src.utils.performance_monitor import ConcurrencyLimiter, RateLimiter
+from typing import Optional
 import random
 import asyncio
 import time
@@ -80,6 +81,91 @@ group_contexts = {}
 active_deferred_tasks = {}
 # 记录每个群组是否正在进行 AI 决策，防止并发冲突
 deciding_groups = set()
+
+async def process_my_logic(
+    bot: Bot, 
+    event: GroupMessageEvent, 
+    message_id: int,
+    text: str, 
+    llm_text: str,
+    normal_images: list[str],
+    stickers: list[str],
+    flash_images: list[str],
+    faces: list[str],
+    group_id: int, 
+    user_id: int,
+    nickname: str,
+    card: str,
+    role: str,
+    raw_msg: any,
+    reply_message_id: Optional[int] = None
+):
+    """
+    处理消息回复逻辑
+    """
+    try:
+        reply_data = await get_chat_reply(group_id, card, llm_text, user_id=user_id, reply_message_id=reply_message_id, bot=bot)
+        reply_text = reply_data.get("text")
+        sticker_url = reply_data.get("sticker")
+        
+        current_time = time.time()
+        if reply_text and ("无法回复" in reply_text or "异常" in reply_text or "超时" in reply_text):
+            if (hasattr(process_my_logic, '_last_error_message') and 
+                process_my_logic._last_error_message == reply_text and
+                hasattr(process_my_logic, '_last_error_time') and 
+                current_time - process_my_logic._last_error_time < 30):
+                logger.warning(f"检测到重复错误消息，跳过发送: {reply_text}")
+                return
+            
+            process_my_logic._last_error_message = reply_text
+            process_my_logic._last_error_time = current_time
+        
+        if reply_text or sticker_url:
+            if reply_text:
+                db_manager.add_chat_log(group_id, f"self:{reply_text}")
+            
+            is_reply = False
+            if reply_text and "[回复]" in reply_text:
+                is_reply = True
+                reply_text = reply_text.replace("[回复]", "").strip()
+            
+            if reply_text:
+                segments = split_text_to_segments(reply_text)
+                for i, seg in enumerate(segments):
+                    msg_segments = []
+                    
+                    if i == 0:
+                        if is_reply:
+                            msg_segments.append(MessageSegment.reply(message_id))
+                    
+                    parts = re.split(r'(\[at:.*?\])', seg)
+                    for part in parts:
+                        if part.startswith("[at:") and part.endswith("]"):
+                            target_name = part[4:-1].strip()
+                            target_id = db_manager.get_user_id_by_name(group_id, target_name)
+                            if target_id:
+                                msg_segments.append(MessageSegment.at(target_id))
+                            else:
+                                msg_segments.append(MessageSegment.text(f"@{target_name}"))
+                        elif part:
+                            msg_segments.append(MessageSegment.text(part))
+                    
+                    if msg_segments:
+                        await bot.send(event, Message(msg_segments), at_sender=False)
+                    
+                    if i < len(segments) - 1 or sticker_url:
+                        delay = min(1.5, max(0.3, len(seg) * 0.08))
+                        await asyncio.sleep(delay + random.uniform(0.1, 0.5))
+            
+            if sticker_url:
+                await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
+        
+        logger.info(f"[{role}] {card}({user_id}) 唤醒了{bot_config.bot_name}")
+        logger.debug(f"清洗后文本 (LLM): {llm_text}")
+        logger.debug(f"{bot_config.bot_name}回复: {reply_text}")
+    
+    except Exception as e:
+        logger.error(f"处理消息时发生异常: {e}", exc_info=True)
 
 async def deferred_decision_worker(group_id: int, bot: Bot):
     """
@@ -405,105 +491,4 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         raw_msg=raw_message,
         reply_message_id=reply_message_id  # 传递引用消息 ID
     )
-
-async def process_my_logic(
-    bot: Bot, 
-    event: GroupMessageEvent, 
-    message_id: int,
-    text: str, 
-    llm_text: str,
-    normal_images: list[str], # 普通图片
-    stickers: list[str],      # 表情包
-    flash_images: list[str],   # 闪照
-    faces: list[str],         # 系统表情 ID
-    group_id: int, 
-    user_id: int,
-    nickname: str,
-    card: str,
-    role: str,
-    raw_msg: any,
-    reply_message_id: Optional[int] = None  # 添加引用消息 ID 参数
-):
-    """
-    这就是您要编写代码的方法。
-    """
-    try:
-        # 1. 获取 AI 回复
-        # 使用异步调用，不会阻塞其他消息的处理
-        reply_data = await get_chat_reply(group_id, card, llm_text, user_id=user_id, reply_message_id=reply_message_id, bot=bot)
-        reply_text = reply_data.get("text")
-        sticker_url = reply_data.get("sticker")
-        
-        # 检查是否为错误消息且与上一次相同，防止短时间内重复发送相同错误
-        current_time = time.time()
-        if reply_text and ("无法回复" in reply_text or "异常" in reply_text or "超时" in reply_text):
-            if (hasattr(process_my_logic, '_last_error_message') and 
-                process_my_logic._last_error_message == reply_text and
-                hasattr(process_my_logic, '_last_error_time') and 
-                current_time - process_my_logic._last_error_time < 30):
-                logger.warning(f"检测到重复错误消息，跳过发送: {reply_text}")
-                return
-            
-            # 更新最后错误消息记录
-            process_my_logic._last_error_message = reply_text
-            process_my_logic._last_error_time = current_time
-        
-        if reply_text or sticker_url:
-            # 2. 存入数据库 (只存文字内容)
-            if reply_text:
-                db_manager.add_chat_log(group_id, f"self:{reply_text}")
-            
-            # 3. 处理艾特与引用标签
-            # 提取 [回复] 标签
-            is_reply = False
-            if reply_text and "[回复]" in reply_text:
-                is_reply = True
-                reply_text = reply_text.replace("[回复]", "").strip()
-            
-            # 4. 分段发送回复，模拟真人感
-            if reply_text:
-                # 无论长短都尝试拆分，确保符合群聊短句习惯
-                segments = split_text_to_segments(reply_text)
-                for i, seg in enumerate(segments):
-                    # 构造消息段列表
-                    msg_segments = []
-                    
-                    # 只有第一段消息处理艾特和引用
-                    if i == 0:
-                        if is_reply:
-                            msg_segments.append(MessageSegment.reply(message_id))
-                    
-                    # 解析并处理 [at:用户名]
-                    parts = re.split(r'(\[at:.*?\])', seg)
-                    for part in parts:
-                        if part.startswith("[at:") and part.endswith("]"):
-                            target_name = part[4:-1].strip()
-                            target_id = db_manager.get_user_id_by_name(group_id, target_name)
-                            if target_id:
-                                msg_segments.append(MessageSegment.at(target_id))
-                            else:
-                                msg_segments.append(MessageSegment.text(f"@{target_name}"))
-                        elif part:
-                            msg_segments.append(MessageSegment.text(part))
-                    
-                    if msg_segments:
-                        await bot.send(event, Message(msg_segments), at_sender=False)
-                    
-                    # 模拟打字间隔：如果后面还有消息段或表情包，则延迟
-                    if i < len(segments) - 1 or sticker_url:
-                        # 基础延迟 + 随机抖动
-                        delay = min(1.5, max(0.3, len(seg) * 0.08))
-                        await asyncio.sleep(delay + random.uniform(0.1, 0.5))
-            
-            # 发送表情包
-            if sticker_url:
-                await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
-        
-        # 打印分类信息
-        logger.info(f"[{role}] {card}({user_id}) 唤醒了{bot_config.bot_name}")
-        logger.debug(f"清洗后文本 (LLM): {llm_text}")
-        logger.debug(f"{bot_config.bot_name}回复: {reply_text}")
-    
-    except Exception as e:
-        logger.error(f"处理消息时发生异常: {e}", exc_info=True)
     

@@ -147,7 +147,43 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
         elif seg.type == "reply":
             reply_id = seg.data.get("id")
             if reply_id:
-                abstract = await get_message_abstract(bot, int(reply_id))
-                cleaned_parts.append(f"[回复: \"{abstract}\"]")
+                try:
+                    msg_data = await bot.get_msg(message_id=int(reply_id))
+                    msg_content = msg_data.get("message", "")
+                    
+                    if isinstance(msg_content, str):
+                        content_preview = msg_content[:20] + ("..." if len(msg_content) > 20 else "")
+                    elif isinstance(msg_content, list):
+                        abstract = ""
+                        for msg_seg in msg_content:
+                            if msg_seg["type"] == "text":
+                                abstract += msg_seg["data"]["text"]
+                            elif msg_seg["type"] == "image":
+                                abstract += "[图片]"
+                            elif msg_seg["type"] == "face":
+                                abstract += "[表情]"
+                            if len(abstract) > 20:
+                                break
+                        content_preview = abstract[:20] + ("..." if len(abstract) > 20 else "")
+                    else:
+                        content_preview = "未知消息"
+                    
+                    sender_id = msg_data.get("sender_id", msg_data.get("user_id"))
+                    sender_name = None
+                    
+                    if sender_id:
+                        try:
+                            member_info = await bot.get_group_member_info(group_id=event.group_id, user_id=int(sender_id))
+                            sender_name = member_info.get("card") or member_info.get("nickname")
+                        except Exception:
+                            pass
+                    
+                    if sender_name:
+                        cleaned_parts.append(f"[回复@{sender_name}: \"{content_preview}\"]")
+                    else:
+                        cleaned_parts.append(f"[回复: \"{content_preview}\"]")
+                except Exception as e:
+                    abstract = await get_message_abstract(bot, int(reply_id))
+                    cleaned_parts.append(f"[回复: \"{abstract}\"]")
 
     return " ".join(cleaned_parts)
