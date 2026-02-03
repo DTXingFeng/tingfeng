@@ -32,16 +32,57 @@ def get_mood_description(mood_value: int) -> str:
     else:
         return "兴奋狂喜 (非常热情，充满了元气。)"
 
-async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_id: Optional[int] = None) -> Dict[str, any]:
+async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_id: Optional[int] = None, reply_message_id: Optional[int] = None, bot = None) -> Dict[str, any]:
     """
     获取 AI 回复逻辑
     返回格式: {"text": str, "sticker": Optional[str]}
     """
+    # 如果有引用消息 ID，尝试获取引用内容
+    reply_message_content = None
+    if reply_message_id and bot:
+        try:
+            from nonebot.adapters.onebot.v11 import Message as OneBotMessage
+            
+            # 使用 bot API 获取历史消息
+            msg_data = await bot.get_msg(message_id=reply_message_id)
+            
+            if msg_data:
+                # 解析消息数据
+                sender_id = msg_data.get("user_id")
+                sender_name = msg_data.get("sender_name", f"用户{sender_id}")
+                msg_text = msg_data.get("message", "")
+                
+                # 如果消息是段格式，转换为文本
+                if isinstance(msg_text, list):
+                    text_parts = []
+                    for seg in msg_text:
+                        if seg.get("type") == "text":
+                            text_parts.append(seg.get("data", {}).get("text", ""))
+                        elif seg.get("type") == "at":
+                            qq = seg.get("data", {}).get("qq", "")
+                            text_parts.append(f"[@{qq}]")
+                        elif seg.get("type") == "image":
+                            text_parts.append("[图片]")
+                        elif seg.get("type") == "face":
+                            text_parts.append("[表情]")
+                    msg_text = "".join(text_parts)
+                
+                reply_message_content = {
+                    "sender": sender_name,
+                    "sender_id": sender_id,
+                    "content": msg_text,
+                    "message_id": reply_message_id
+                }
+                
+                logger.debug(f"获取到引用消息: {sender_name}: {msg_text[:50]}...")
+        except Exception as e:
+            logger.debug(f"获取引用消息失败: {e}")
+    
     # 1. 获取配置
     model_alias = ai_config.reply_model
     creds = ai_config_manager.get_model_credentials(model_alias)
     if not creds:
-        return f"好像连不上网了，{bot_config.bot_name}现在有点懵... (扶额)"
+        return {"text": f"好像连不上网了，{bot_config.bot_name}现在有点懵... (扶额)", "sticker": None}
 
     # 1.5 判断是否为创造者
     is_creator = False
@@ -180,6 +221,19 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
             "role": "system",
             "content": f"### 你对 {user_name} 的了解：\n{context_str}"
         })
+    
+    # 如果有引用消息，注入上下文
+    if reply_message_content:
+        ref_msg = reply_message_content
+        context_info = f"### 引用消息上下文：\n"
+        context_info += f"用户正在回复 {ref_msg['sender']} (ID: {ref_msg['sender_id']}) 的消息\n"
+        context_info += f"被引用的消息内容：{ref_msg['content']}\n"
+        context_info += "请根据这个上下文理解用户的回复意图。"
+        
+        messages.append({
+            "role": "system",
+            "content": context_info
+        })
   
     # 注入创造者身份识别
     if is_creator:
@@ -216,7 +270,13 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
     history_str = "\n".join(history)
     messages.append({
         "role": "user", 
-        "content": f"以下是群聊的历史记录（短期记忆）：\n{history_str}\n\n请记住你现在的身份是'{bot_config.bot_name}'，现在请回复 {user_name} 的最新消息。"
+        "content": f"以下是群聊的历史记录（短期记忆）：\n{history_str}\n\n"
+        f"### 重要指代规则：\n"
+        f"1. 历史消息中的「你」需要根据上下文判断指代对象：\n"
+        f"   - 如果是用户A对用户B的对话（如「用户A: 你觉得呢？」），这里的「你」通常指的是用户B，而不是你（{bot_config.bot_name}）。\n"
+        f"   - 只有当消息明确艾特你、提到你的名字「{bot_config.bot_name}」、或者是在接你上一句话时，才是对你的称呼。\n"
+        f"2. 分析对话流向：仔细观察消息的发送者和接收者关系，判断对话是在用户之间进行，还是用户与你之间进行。\n"
+        f"3. 你现在的身份是「{bot_config.bot_name}」，请回复 {user_name} 的最新消息。"
     })
 
     # 4. 使用上下文管理器优化消息列表

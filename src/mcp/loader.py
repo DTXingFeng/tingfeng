@@ -7,6 +7,7 @@ from src.mcp.tools.memory import MemorySearchTool, GetUserMemoriesTool, AddMemor
 from src.mcp.tools.user import UserProfileTool, GetCreatorInfoTool, UpdateRelationshipTool
 from src.mcp.tools.knowledge import KnowledgeQueryTool, GetCreatorKnowledgeTool, AddKnowledgeTool
 from src.mcp.tools.utility import GetCurrentTimeTool, IsWithinScheduleTool, FormatTextTool, CountWordsTool
+from src.mcp.tools.message import GetRecentMessagesTool, GetMessageContextTool
 from src.mcp.registry import tool_registry
 from src.utils.logger import get_logger
 
@@ -43,6 +44,10 @@ def load_all_tools():
     tool_registry.register(FormatTextTool())
     tool_registry.register(CountWordsTool())
     
+    # 消息相关工具
+    tool_registry.register(GetRecentMessagesTool())
+    tool_registry.register(GetMessageContextTool())
+    
     logger.info(f"MCP 工具加载完成！共注册 {len(tool_registry.list_tools())} 个工具")
     
     # 输出已注册的工具列表
@@ -64,7 +69,8 @@ def get_tools_summary() -> dict:
         "memory": [],
         "user": [],
         "knowledge": [],
-        "utility": []
+        "utility": [],
+        "message": []
     }
     
     for tool_name in tools:
@@ -75,6 +81,8 @@ def get_tools_summary() -> dict:
             summary["user"].append(tool_name)
         elif tool_name.startswith('knowledge'):
             summary["knowledge"].append(tool_name)
+        elif tool_name.startswith('get_') and 'message' in tool_name or tool_name.startswith('message'):
+            summary["message"].append(tool_name)
         else:
             summary["utility"].append(tool_name)
     
@@ -100,6 +108,9 @@ if __name__ == "__main__":
             print(f"  - {t}")
         print(f"\n实用工具 ({len(summary['utility'])}):")
         for t in summary['utility']:
+            print(f"  - {t}")
+        print(f"\n消息工具 ({len(summary['message'])}):")
+        for t in summary['message']:
             print(f"  - {t}")
         
         print("\n测试工具调用...")

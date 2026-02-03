@@ -2,14 +2,17 @@
 MCP 工具集合
 """
 
-from .memory import MemorySearchTool
-from .user import UserProfileTool
-from .knowledge import KnowledgeQueryTool
-from .utility import GetCurrentTimeTool
+from .memory import MemorySearchTool, GetUserMemoriesTool, AddMemoryTool
+from .user import UserProfileTool, GetCreatorInfoTool, UpdateRelationshipTool
+from .knowledge import KnowledgeQueryTool, GetCreatorKnowledgeTool, AddKnowledgeTool
+from .utility import GetCurrentTimeTool, IsWithinScheduleTool, FormatTextTool, CountWordsTool
+from .message import GetRecentMessagesTool, GetMessageContextTool
 
 __all__ = [
     'MemorySearchTool',
-    'UserProfileTool', 
+    'GetUserMemoriesTool', 
     'KnowledgeQueryTool',
-    'GetCurrentTimeTool'
+    'GetCurrentTimeTool',
+    'GetRecentMessagesTool',
+    'GetMessageContextTool'
 ]

@@ -135,8 +135,9 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     nickname=ctx['nickname'],
                                     card=decision.get("reply_to_user", ctx['display_name']),
                                     role=ctx['role'],
-                                    raw_msg=ctx['raw_msg']
-                                )
+                                    raw_msg=ctx['raw_msg'],
+                                    reply_message_id=ctx.get('reply_message_id')  # 传递引用消息 ID
+                            )
                             # 即使 AI 决定不回复，也有一定概率随机回复
                             elif random.random() < bot_config.reply_rate:
                                 await process_my_logic(
@@ -154,7 +155,8 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     nickname=ctx['nickname'],
                                     card=ctx['display_name'],
                                     role=ctx['role'],
-                                    raw_msg=ctx['raw_msg']
+                                    raw_msg=ctx['raw_msg'],
+                                    reply_message_id=ctx.get('reply_message_id')  # 传递引用消息 ID
                                 )
                         finally:
                             deciding_groups.remove(group_id)
@@ -205,6 +207,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     stickers = []       # 表情包 URL (sub_type=1)
     flash_images = []    # 闪照 URL (type=flash)
     faces = []          # 系统表情 ID (例如: 124 代表 [呲牙])
+    reply_message_id = None  # 引用消息 ID
     
     for segment in event.get_message():
         # 处理图片
@@ -225,6 +228,12 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             face_id = segment.data.get("id")
             if face_id:
                 faces.append(face_id)
+        
+        # 处理引用消息
+        elif segment.type == "reply":
+            reply_message_id = segment.data.get("message_id")
+            if reply_message_id:
+                logger.debug(f"检测到引用消息: {reply_message_id}")
     
     # 4. 原始消息对象
     raw_message = event.get_message()
@@ -292,7 +301,8 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         "nickname": nickname,
         "display_name": display_name,
         "role": role,
-        "raw_msg": raw_message
+        "raw_msg": raw_message,
+        "reply_message_id": reply_message_id
     }
     
     do_reply = False
@@ -375,7 +385,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
     if not do_reply:
         return
-
+    
     # --- 调用处理逻辑 ---
     await process_my_logic(
         bot=bot,
@@ -392,7 +402,8 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         nickname=nickname,
         card=target_user, # 使用决策引擎确定的目标用户
         role=role,
-        raw_msg=raw_message
+        raw_msg=raw_message,
+        reply_message_id=reply_message_id  # 传递引用消息 ID
     )
 
 async def process_my_logic(
@@ -410,7 +421,8 @@ async def process_my_logic(
     nickname: str,
     card: str,
     role: str,
-    raw_msg: any
+    raw_msg: any,
+    reply_message_id: Optional[int] = None  # 添加引用消息 ID 参数
 ):
     """
     这就是您要编写代码的方法。
@@ -418,7 +430,7 @@ async def process_my_logic(
     try:
         # 1. 获取 AI 回复
         # 使用异步调用，不会阻塞其他消息的处理
-        reply_data = await get_chat_reply(group_id, card, llm_text, user_id=user_id)
+        reply_data = await get_chat_reply(group_id, card, llm_text, user_id=user_id, reply_message_id=reply_message_id, bot=bot)
         reply_text = reply_data.get("text")
         sticker_url = reply_data.get("sticker")
         
