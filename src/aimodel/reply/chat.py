@@ -200,9 +200,14 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
     # 引导 AI 使用表情包
     system_prompt += (
         "\n\n### 表情包使用指南：\n"
-        "如果你觉得当前语境适合发送表情包，请在回复文本的最后加上 '[表情:标签名]'。\n"
-        "可选标签：开心、大哭、暴躁、委屈、傲娇、得意、摸摸头、疑惑、震惊。\n"
-        "例如：'哼，这种简单的题我也能解出来，看好了！[表情:得意]'"
+        "**有时你可以在回复末尾加上表情包来增强表达。**\n"
+        "格式：在回复文本最后加上 '[表情:标签名]'\n\n"
+        "可选标签：开心、暴躁、委屈、得意、傲娇、摸摸头、疑惑、震惊、大哭。\n\n"
+        "**特殊情况**：如果你实在不知道说什么合适，可以只发一个表情包（整个回复只有 '[表情:xxx]'）。\n\n"
+        "示例：\n"
+        "- '乐[表情:开心]'\n"
+        "- '你傻逼吧[表情:暴躁]'\n"
+        "- '[表情:得意]'（单独发表情包）"
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -375,10 +380,14 @@ async def get_chat_reply(group_id: int, user_name: str, current_msg: str, user_i
         sticker_match = re.search(sticker_pattern, reply_content)
         if sticker_match:
             tag = sticker_match.group(1).strip()
+            logger.debug(f"检测到表情包标签: {tag}")
             # 从数据库中随机选一个对应标签的表情包
             available_stickers = db_manager.get_stickers_by_tag(tag)
             if available_stickers:
                 sticker_url = random.choice(available_stickers)["file_id"]
+                logger.info(f"选择表情包: 标签={tag}, URL={sticker_url}")
+            else:
+                logger.warning(f"未找到标签 '{tag}' 对应的表情包")
         
         # 无论是否找到对应表情，都从文本中移除标签
         reply_content = re.sub(r'\[\s*表情\s*[:：].*?\]', '', reply_content).strip()
