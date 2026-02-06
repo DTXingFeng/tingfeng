@@ -77,9 +77,14 @@ async def process_and_encode_image(url: str, max_size: int = 1024) -> tuple[str,
         
         return base64_str, file_hash, is_animated
 
-async def describe_image(image_url: str, is_sticker: bool = False) -> str:
+async def describe_image(image_url: str, is_sticker: bool = False, file_id: str = None) -> str:
     """
     使用 VLM 模型识别图片内容。如果是表情包，会进行缓存处理。
+    
+    Args:
+        image_url: 图片URL（用于下载）
+        is_sticker: 是否为表情包
+        file_id: OneBot的file字段（用于发送消息）
     """
     # 1. 预处理并获取哈希
     try:
@@ -154,11 +159,14 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
                 tag, desc = result.split("|", 1)
                 tag = tag.strip()
                 desc = desc.strip()
-                db_manager.save_sticker_cache(file_hash, desc, tag, image_url)
+                # 优先使用 file_id，如果没有则使用 url
+                stored_id = file_id or image_url
+                db_manager.save_sticker_cache(file_hash, desc, tag, stored_id)
                 return f"[表情描述: {desc}, 标签: {tag}]"
             else:
                 # 兜底处理
-                db_manager.save_sticker_cache(file_hash, result, "未知", image_url)
+                stored_id = file_id or image_url
+                db_manager.save_sticker_cache(file_hash, result, "未知", stored_id)
                 return f"[表情描述: {result}]"
         
         return result
@@ -166,10 +174,10 @@ async def describe_image(image_url: str, is_sticker: bool = False) -> str:
     except Exception as e:
         return f"图像识别出错: {str(e)}"
 
-async def get_vlm_description(url: str, is_sticker: bool = False) -> str:
+async def get_vlm_description(url: str, is_sticker: bool = False, file_id: str = None) -> str:
     """包装函数，供 message_processor 调用"""
     if not url:
         return "图片 URL 为空"
     
-    description = await describe_image(url, is_sticker=is_sticker)
+    description = await describe_image(url, is_sticker=is_sticker, file_id=file_id)
     return description

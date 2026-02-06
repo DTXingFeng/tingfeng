@@ -51,7 +51,7 @@ async def load_mcp_tools():
     """Bot 启动时加载所有 MCP 工具"""
     try:
         from src.mcp.loader import load_all_tools
-        await load_all_tools()
+        load_all_tools()
     except Exception as e:
         print(f"加载 MCP 工具失败: {e}")
 

@@ -158,7 +158,21 @@ async def process_my_logic(
                         await asyncio.sleep(delay + random.uniform(0.1, 0.5))
             
             if sticker_url:
-                await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
+                try:
+                    await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
+                    logger.info(f"成功发送表情包: {sticker_url[:50]}...")
+                except Exception as e:
+                    logger.warning(f"发送表情包失败: {e}, URL: {sticker_url[:50]}...")
+                    # 如果是临时链接导致的失败，删除缓存中的该表情包
+                    if sticker_url.startswith("http"):
+                        # 获取标签，然后删除相关的表情包缓存
+                        import re
+                        sticker_pattern = r'\[\s*表情\s*[:：]\s*(.*?)\s*\]'
+                        match = re.search(sticker_pattern, reply_text)
+                        if match:
+                            tag = match.group(1).strip()
+                            logger.warning(f"表情包 '{tag}' 的 URL 已失效，将从缓存中移除")
+                            # TODO: 可以在这里添加删除过期表情包的逻辑
         
         logger.info(f"[{role}] {card}({user_id}) 唤醒了{bot_config.bot_name}")
         logger.debug(f"清洗后文本 (LLM): {llm_text}")

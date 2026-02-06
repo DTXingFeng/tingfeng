@@ -360,6 +360,20 @@ class DBManager:
             rows = cursor.fetchall()
             return [{"file_id": row[0], "description": row[1]} for row in rows]
 
+    def clear_all_stickers(self) -> int:
+        """清空所有表情包缓存
+        
+        Returns:
+            删除的表情包数量
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM stickers")
+            count = cursor.fetchone()[0]
+            cursor.execute("DELETE FROM stickers")
+            conn.commit()
+            return count
+
     def get_mood(self, group_id: int) -> int:
         """获取群聊对应的心情值"""
         with self._get_connection() as conn:

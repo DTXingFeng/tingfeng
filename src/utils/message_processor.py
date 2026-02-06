@@ -135,11 +135,12 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
         
         elif seg.type == "image":
             url = seg.data.get("url")
+            file = seg.data.get("file")
             # 这里的 sub_type=1 通常代表表情包
             is_sticker = str(seg.data.get("sub_type", "0")) == "1"
             
             if vlm_func and url:
-                description = await vlm_func(url, is_sticker=is_sticker)
+                description = await vlm_func(url, is_sticker=is_sticker, file_id=file)
                 cleaned_parts.append(f"[图片内容: {description}]")
             else:
                 cleaned_parts.append("[图片]")
