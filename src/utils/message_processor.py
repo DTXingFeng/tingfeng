@@ -23,6 +23,7 @@ FACE_MAP = {
     "13": "呲牙",
 }
 
+
 def split_text_to_segments(text: str, max_len: int = 30) -> List[str]:
     """
     将文本拆分为多个自然段落，用于分段发送。
@@ -30,40 +31,41 @@ def split_text_to_segments(text: str, max_len: int = 30) -> List[str]:
     """
     if not text:
         return []
-    
+
     # 1. 首先按换行符拆分
-    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
     segments = []
-    
+
     for line in lines:
         if len(line) <= max_len:
             segments.append(line)
         else:
             # 2. 如果一行太长，按句末标点拆分
             # 匹配 。！？! ? ... 以及空格，模拟群聊断句
-            sub_parts = re.split(r'([。！？!?\s]+|[\.]{3,})', line)
-            
+            sub_parts = re.split(r"([。！？!?\s]+|[\.]{3,})", line)
+
             current_seg = ""
             for i in range(0, len(sub_parts), 2):
                 part = sub_parts[i]
-                punc = sub_parts[i+1] if i+1 < len(sub_parts) else ""
-                
+                punc = sub_parts[i + 1] if i + 1 < len(sub_parts) else ""
+
                 # 如果当前段加上新部分超过长度，先存入当前段
                 if current_seg and len(current_seg) + len(part) + len(punc) > max_len:
                     segments.append(current_seg.strip())
                     current_seg = part + punc
                 else:
                     current_seg += part + punc
-                
+
                 # 如果单部分就已经超长了，强制截断（虽然群聊很少见，但做个保底）
                 while len(current_seg) > max_len:
                     segments.append(current_seg[:max_len].strip())
                     current_seg = current_seg[max_len:]
-            
+
             if current_seg:
                 segments.append(current_seg.strip())
-                
+
     return [s for s in segments if s]
+
 
 async def get_message_abstract(bot: Bot, message_id: int) -> str:
     """获取消息内容的摘要，用于回复显示"""
@@ -89,6 +91,7 @@ async def get_message_abstract(bot: Bot, message_id: int) -> str:
         return "未知消息"
     return "未知消息"
 
+
 async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=None) -> str:
     """
     将原始消息序列转换为 LLM 可读的文本
@@ -102,7 +105,9 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
         # 检查是否已经有 @self 了，避免重复
         has_at_self = False
         for seg in message:
-            if seg.type == "at" and (str(seg.data.get("qq")) == str(bot.self_id) or str(seg.data.get("qq")) == bot_config.bot_qq):
+            if seg.type == "at" and (
+                str(seg.data.get("qq")) == str(bot.self_id) or str(seg.data.get("qq")) == bot_config.bot_qq
+            ):
                 has_at_self = True
                 break
         if not has_at_self:
@@ -113,7 +118,7 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
             text = seg.data.get("text", "").strip()
             if text:
                 cleaned_parts.append(text)
-        
+
         elif seg.type == "at":
             qq = seg.data.get("qq")
             if qq == "all":
@@ -127,31 +132,31 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
                     cleaned_parts.append(f"@{name}")
                 except Exception:
                     cleaned_parts.append(f"@{qq}")
-        
+
         elif seg.type == "face":
             face_id = seg.data.get("id")
             face_name = FACE_MAP.get(str(face_id), f"表情:{face_id}")
             cleaned_parts.append(f"[{face_name}]")
-        
+
         elif seg.type == "image":
             url = seg.data.get("url")
             file = seg.data.get("file")
             # 这里的 sub_type=1 通常代表表情包
             is_sticker = str(seg.data.get("sub_type", "0")) == "1"
-            
+
             if vlm_func and url:
                 description = await vlm_func(url, is_sticker=is_sticker, file_id=file)
                 cleaned_parts.append(f"[图片内容: {description}]")
             else:
                 cleaned_parts.append("[图片]")
-        
+
         elif seg.type == "reply":
             reply_id = seg.data.get("id")
             if reply_id:
                 try:
                     msg_data = await bot.get_msg(message_id=int(reply_id))
                     msg_content = msg_data.get("message", "")
-                    
+
                     if isinstance(msg_content, str):
                         content_preview = msg_content[:20] + ("..." if len(msg_content) > 20 else "")
                     elif isinstance(msg_content, list):
@@ -168,23 +173,25 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
                         content_preview = abstract[:20] + ("..." if len(abstract) > 20 else "")
                     else:
                         content_preview = "未知消息"
-                    
+
                     sender_id = msg_data.get("sender_id", msg_data.get("user_id"))
                     sender_name = None
-                    
+
                     if sender_id:
                         try:
-                            member_info = await bot.get_group_member_info(group_id=event.group_id, user_id=int(sender_id))
+                            member_info = await bot.get_group_member_info(
+                                group_id=event.group_id, user_id=int(sender_id)
+                            )
                             sender_name = member_info.get("card") or member_info.get("nickname")
                         except Exception:
                             pass
-                    
+
                     if sender_name:
-                        cleaned_parts.append(f"[回复@{sender_name}: \"{content_preview}\"]")
+                        cleaned_parts.append(f'[回复@{sender_name}: "{content_preview}"]')
                     else:
-                        cleaned_parts.append(f"[回复: \"{content_preview}\"]")
+                        cleaned_parts.append(f'[回复: "{content_preview}"]')
                 except Exception as e:
                     abstract = await get_message_abstract(bot, int(reply_id))
-                    cleaned_parts.append(f"[回复: \"{abstract}\"]")
+                    cleaned_parts.append(f'[回复: "{abstract}"]')
 
     return " ".join(cleaned_parts)

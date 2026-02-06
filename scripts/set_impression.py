@@ -15,7 +15,7 @@ async def set_manual_impression():
 
     try:
         # 调用封装好的方法，它会自动确保表已创建
-        db_manager.update_user_impression(group_id, user_name, impression)
+        await db_manager.update_user_impression(group_id, user_name, impression)
         print(f"成功通过 DBManager 设置对用户 '{user_name}' 的印象为: {impression}")
     except Exception as e:
         print(f"设置失败: {e}")

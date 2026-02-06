@@ -12,48 +12,76 @@ import json
 
 logger = get_logger(__name__)
 
-async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_me: bool = False, user_id: Optional[int] = None) -> dict:
+
+async def should_i_reply(
+    group_id: int, user_name: str, current_msg: str, is_at_me: bool = False, user_id: Optional[int] = None
+) -> dict:
     """
     判断机器人是否应该参与当前对话，并评价该对话对机器人心情的影响
     """
+    # 0. 发言频率控制 - 只限制主动发言，被艾特时不限制
+    if not is_at_me:
+        recent_replies = await db_manager.get_recent_reply_count(group_id, minutes=10)
+        last_reply_time = await db_manager.get_last_reply_time(group_id)
+        
+        # 频率限制配置（仅针对主动发言）
+        MAX_REPLIES_10MIN = 5  # 10分钟内最多主动回复次数
+        MIN_INTERVAL_SECONDS = 30  # 两次主动回复间最小间隔
+        
+        # 计算距离上次回复的时间
+        from datetime import datetime
+        time_since_last_reply = None
+        if last_reply_time:
+            time_since_last_reply = (datetime.now() - last_reply_time).total_seconds()
+        
+        # 频率检查：只对主动发言进行限制
+        if recent_replies >= MAX_REPLIES_10MIN:
+            logger.info(f"频率限制: 10分钟内已主动回复{recent_replies}次，跳过非艾特消息")
+            return {"should_reply": False, "mood_impact": 0}
+        
+        if time_since_last_reply and time_since_last_reply < MIN_INTERVAL_SECONDS:
+            logger.info(f"频率限制: 距离上次回复仅{time_since_last_reply:.0f}秒，跳过非艾特消息")
+            return {"should_reply": False, "mood_impact": 0}
+    
     # 1. 获取配置
     model_alias = ai_config.decision_model
     if not model_alias:
         return {"should_reply": False, "mood_impact": 0}
-        
+
     creds = ai_config_manager.get_model_credentials(model_alias)
     if not creds:
         return {"should_reply": False, "mood_impact": 0}
 
     # 获取当前心情（作为参考）
-    current_mood_val = db_manager.get_mood(group_id)
-    
+    current_mood_val = await db_manager.get_mood(group_id)
+
     # 获取人格状态
-    personality_state = db_manager.get_personality_state(group_id)
+    personality_state = await db_manager.get_personality_state(group_id)
     traits = personality_state.get("traits", {})
     recent_thoughts = personality_state.get("recent_thoughts", "暂无")
 
     # 2. 准备上下文 (获取最近 10 条消息)
-    history = db_manager.get_chat_log(group_id, limit=10)
+    history = await db_manager.get_chat_log(group_id, limit=10)
     history_str = "\n".join(history)
 
     # 3. 检索相关记忆与知识
-    user_profile = db_manager.get_user_impression(group_id, user_name)
-    user_specific_memories = db_manager.get_user_specific_memories(group_id, user_name, limit=3)
-    
+    user_profile = await db_manager.get_user_impression(group_id, user_name)
+    user_specific_memories = await db_manager.get_user_specific_memories(group_id, user_name, limit=3)
+
     # 注入高频黑话（只使用频率>=30的已验证黑话）
-    learned_slangs = db_manager.get_slang_candidates(group_id, min_freq=30, stage=2)
+    learned_slangs = await db_manager.get_slang_candidates(group_id, min_freq=30, stage=2)
     slang_context = ""
     if learned_slangs:
         slang_list = [f"- {s['phrase']}: {s['definition']}" for s in learned_slangs]
         slang_context = "\n### 本群特有黑话/暗语库：\n" + "\n".join(slang_list)
-    
+
     long_term_memories = []
     try:
         query_vectors = await get_embeddings([current_msg])
-        long_term_memories = vector_db.query_memory(group_id, query_vectors[0], n_results=3)
-    except:
-        pass
+        if query_vectors and len(query_vectors) > 0:
+            long_term_memories = await vector_db.query_memory(group_id, query_vectors[0], n_results=3)
+    except Exception as e:
+        logger.warning(f"获取长期记忆失败: {e}")
 
     # 构造记忆上下文
     memory_context = []
@@ -65,7 +93,7 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
     if long_term_memories:
         lt_mem_str = "\n  ".join([f"* {m}" for m in long_term_memories])
         memory_context.append(f"- 相关的长期记忆：\n  {lt_mem_str}")
-    
+
     memory_str = "\n".join(memory_context) if memory_context else "暂无相关背景记忆。"
 
     # 4. 构造决策 Prompt
@@ -90,7 +118,7 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         "   - **对话流向分析**：判断当前消息是否是「接话」。如果用户在回应你的话、继续你开启的话题、或对你说的话有反应，这就算作上下文关联，应该回复。\n"
         "   - 如果 is_at_me 为 true，通常应该回复，除非对方在明显刷屏、辱骂或无理取闹。\n"
         "   - **关于图片**：除非图片内容直接提及你、或者是你记忆中的重要物品/场景，否则不要随意'点评'别人的图片。人类发图通常是在互相交流，你作为一个幽灵，随意插话点评图片会显得非常唐突且'AI 味'十足。\n"
-        "   - **适度参与**：即使没有相关记忆，如果话题轻松有趣（如梗图、游戏、搞笑内容、日常闲聊），也可以适度参与，给出简短的反应。兴趣评分达到 0.25 以上即可考虑回复。\n"
+        "   - **适度参与**：即使没有相关记忆，如果话题轻松有趣（如梗图、游戏、搞笑内容、日常闲聊），也可以适度参与，给出简短的反应。\n"
         "   - **记忆驱动**：当话题与你的背景记忆（长期记忆、用户往事）有高度重合时，应优先考虑回复。\n"
         "3. **兴趣评分 (interest_score)**：\n"
         "   - 评估你对当前话题的'参与必要性'。0 代表完全不感兴趣/无关，1 代表必须立刻加入对话。\n"
@@ -108,7 +136,7 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         f"### 上下文信息：\n"
         f"最近记录：\n{history_str}\n"
         f"### 重要格式说明：\n"
-        f"1. **引用消息格式**：历史记录中可能出现 `[回复@用户名: \"内容\"]` 格式，这表示「当前消息的发送者正在引用/回复某位用户的话」。\n"
+        f'1. **引用消息格式**：历史记录中可能出现 `[回复@用户名: "内容"]` 格式，这表示「当前消息的发送者正在引用/回复某位用户的话」。\n'
         f"   - 例如：`用户A: 我觉得不对 [回复@用户B: \"你说的对\"]` 表示「用户A正在回复用户B说过的话，用户B才说了'你说的对'」。\n"
         f"   - 引用内容是「被引用者」说的，不是「当前消息发送者」说的。请仔细区分！\n"
         f"2. **指代消歧规则**：\n"
@@ -121,12 +149,12 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
         "### 输出要求：\n"
         "请直接输出 JSON 格式：\n"
         "{\n"
-        "  \"should_reply\": boolean,\n"
-        "  \"reply_to_user\": \"指定回复对象的用户名（必须从上下文或当前消息发送者中选择）\",\n"
-        "  \"mood_impact\": number (-10 到 10 之间的整数),\n"
-        "  \"reason\": \"简短的理由\",\n"
-        "  \"is_replying_to_bot\": boolean,\n"
-        "  \"interest_score\": number (0-1)\n"
+        '  "should_reply": boolean,\n'
+        '  "reply_to_user": "指定回复对象的用户名（必须从上下文或当前消息发送者中选择）",\n'
+        '  "mood_impact": number (-10 到 10 之间的整数),\n'
+        '  "reason": "简短的理由",\n'
+        '  "is_replying_to_bot": boolean,\n'
+        '  "interest_score": number (0-1)\n'
         "}"
     )
 
@@ -134,21 +162,20 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
 
     try:
         optimized_prompt, prompt_tokens = context_manager.truncate_text(
-            text=prompt,
-            model_alias=model_alias,
-            max_output_tokens=200,
-            reserve_ratio=0.1
+            text=prompt, model_alias=model_alias, max_output_tokens=200, reserve_ratio=0.1
         )
-        
+
         if prompt_tokens > 0:
-            print(f"[上下文管理] 决策模型: {model_alias}, 使用tokens: {prompt_tokens}/{context_manager.get_model_max_tokens(model_alias)}")
-        
+            print(
+                f"[上下文管理] 决策模型: {model_alias}, 使用tokens: {prompt_tokens}/{context_manager.get_model_max_tokens(model_alias)}"
+            )
+
         response = await client.chat.completions.create(
             model=creds["model"],
             messages=[{"role": "user", "content": optimized_prompt}],
-            response_format={"type": "json_object"}
+            response_format={"type": "json_object"},
         )
-        
+
         content = response.choices[0].message.content.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -156,22 +183,24 @@ async def should_i_reply(group_id: int, user_name: str, current_msg: str, is_at_
             content = content.split("```")[1].split("```")[0].strip()
 
         decision = json.loads(content)
-        
+
         # 结果解析
-        should_reply = decision.get('should_reply', False)
-        reply_to_user = decision.get('reply_to_user', user_name) # 默认回复当前消息发送者
-        mood_impact = decision.get('mood_impact', 0)
-        interest_score = decision.get('interest_score', 0)
-        is_replying_to_bot = decision.get('is_replying_to_bot', False)
-        
-        print(f"决策引擎: [回复:{should_reply}] [对象:{reply_to_user}] [兴趣:{interest_score}] [心情:{mood_impact:+} ] [理由:{decision.get('reason')}]")
-        
+        should_reply = decision.get("should_reply", False)
+        reply_to_user = decision.get("reply_to_user", user_name)  # 默认回复当前消息发送者
+        mood_impact = decision.get("mood_impact", 0)
+        interest_score = decision.get("interest_score", 0)
+        is_replying_to_bot = decision.get("is_replying_to_bot", False)
+
+        print(
+            f"决策引擎: [回复:{should_reply}] [对象:{reply_to_user}] [兴趣:{interest_score}] [心情:{mood_impact:+} ] [理由:{decision.get('reason')}]"
+        )
+
         return {
             "should_reply": should_reply,
             "reply_to_user": reply_to_user,
             "mood_impact": mood_impact,
             "interest_score": interest_score,
-            "is_replying_to_bot": is_replying_to_bot
+            "is_replying_to_bot": is_replying_to_bot,
         }
 
     except json.JSONDecodeError as e:

@@ -12,12 +12,11 @@ from typing import List, Set
 
 logger = get_logger(__name__)
 
-# 记录正在处理记忆固化的群组，防止并发冲突导致重复记忆
 active_consolidation_groups: Set[int] = set()
 
-# 限制记忆固化的并发数，避免资源耗尽
 consolidation_limiter = ConcurrencyLimiter(max_concurrent=3)
- 
+
+
 @monitor_performance("consolidate_memories")
 async def consolidate_memories(group_id: int):
     """
@@ -25,24 +24,24 @@ async def consolidate_memories(group_id: int):
     """
     if group_id in active_consolidation_groups:
         return
-    
+
     async with consolidation_limiter:
         try:
             active_consolidation_groups.add(group_id)
-        
+
             # 1. 获取未处理的消息 (为了保证总结质量，建议攒够 50 条再处理，单次最多处理 100 条)
-            raw_logs = db_manager.get_unprocessed_logs(group_id, limit=100)
-            if len(raw_logs) < 50: 
+            raw_logs = await db_manager.get_unprocessed_logs(group_id, limit=100)
+            if len(raw_logs) < 50:
                 return
-        
+
             msg_ids = [row[0] for row in raw_logs]
             chat_content = "\n".join([row[1] for row in raw_logs])
 
             # 2. 调用 LLM 进行总结提取
             model_alias = ai_config.consolidation_model
             if not model_alias:
-                model_alias = ai_config.reply_model # 回退到回复模型
-            
+                model_alias = ai_config.reply_model
+
             creds = ai_config_manager.get_model_credentials(model_alias)
             if not creds:
                 return
@@ -67,34 +66,32 @@ async def consolidate_memories(group_id: int):
                 "格式：'STORY|用户名|事件描述'。\n\n"
                 "### 任务 4：提取知识三元组 (Knowledge Triplets)\n"
                 "提取具有客观价值或长期逻辑关联的结构化知识。\n"
-                "格式：'TRIPLET|主体|谓语|客体|置信度(0.1-1.0)'。\n"
-                "例如：'TRIPLET|刑风|正在研究|神经网络|0.9'，'TRIPLET|北京|又称|帝都|1.0'。\n\n"
-                "### 任务 5：情感共鸣评估 (Emotional Tone)\n"
-                "评估这批聊天对你（听风）的情感冲击。你感到被重视了吗？还是被冷落了？\n"
-                "格式：'EMO|数值' (-20 到 20)。\n\n"
-                "如果没有值得记录的内容，请回复'无'。\n\n"
-                f"### 待处理聊天记录：\n{chat_content}"
+                "格式：'TRIPLET|主体|关系|客体|置信度'。置信度范围 0.0-1.0。\n"
+                "例如：'TRIPLET|刑风|喜欢|猫咪|0.95'。\n\n"
+                "### 任务 5：情绪标记 (EMO)\n"
+                "分析群聊氛围的情绪倾向，输出一个整数，范围 -10（极度负面）到 +10（极度正面）。\n"
+                "格式：'EMO|情绪值'。例如：'EMO|3'。\n\n"
+                "### 限制：\n"
+                "- 只输出上述格式的内容，每行一条。\n"
+                "- 如果没有提取到任何有价值的信息，只输出一个字：无。\n"
+                "- 不要输出任何解释、问候或总结。"
             )
 
-            optimized_prompt, prompt_tokens = context_manager.truncate_text(
-                text=prompt,
-                model_alias=model_alias,
-                max_output_tokens=1000,
-                reserve_ratio=0.1
-            )
-            
-            if prompt_tokens > 0:
-                logger.debug(f"[上下文管理] 记忆固化模型: {model_alias}, 使用tokens: {prompt_tokens}/{context_manager.get_model_max_tokens(model_alias)}")
+            # 合并历史消息，但截断以避免超过 token 限制
+            max_chat_length = 3000
+            chat_content = chat_content[-max_chat_length:]
+
+            optimized_prompt = prompt + f"\n\n### 聊天记录：\n{chat_content}\n\n### 提取结果："
 
             response = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "user", "content": optimized_prompt}],
-                temperature=0.3 # 稍微给一点发散空间，有助于提取更有灵性的记忆
+                temperature=0.3
             )
-            
+
             output = response.choices[0].message.content.strip()
             if output == "无" or not output:
-                db_manager.mark_as_processed(msg_ids)
+                await db_manager.mark_as_processed(msg_ids)
                 return
 
             # 3. 解析并存入
@@ -106,21 +103,21 @@ async def consolidate_memories(group_id: int):
                     parts = line.split("|")
                     if len(parts) >= 3:
                         u_name, u_profile = parts[1].strip(), parts[2].strip()
-                        db_manager.update_user_impression(group_id, u_name, u_profile)
+                        await db_manager.update_user_impression(group_id, u_name, u_profile)
                 elif line.startswith("STORY|"):
                     parts = line.split("|")
                     if len(parts) >= 3:
                         u_name, u_story = parts[1].strip(), parts[2].strip()
-                        db_manager.add_user_specific_memory(group_id, u_name, u_story)
+                        await db_manager.add_user_specific_memory(group_id, u_name, u_story)
                 elif line.startswith("TRIPLET|"):
                     parts = line.split("|")
                     if len(parts) >= 5:
                         sub, pred, obj = parts[1].strip(), parts[2].strip(), parts[3].strip()
                         try:
                             conf = float(parts[4].strip())
-                            db_manager.add_knowledge_triplet(group_id, sub, pred, obj, conf)
+                            await db_manager.add_knowledge_triplet(group_id, sub, pred, obj, conf)
                         except:
-                            db_manager.add_knowledge_triplet(group_id, sub, pred, obj)
+                            await db_manager.add_knowledge_triplet(group_id, sub, pred, obj)
                 elif line.startswith("EMO|"):
                     parts = line.split("|")
                     if len(parts) >= 2:
@@ -133,28 +130,26 @@ async def consolidate_memories(group_id: int):
                     if len(content) > 5:
                         shards.append(content)
                 else:
-                    # 兼容性：如果 AI 没按格式带前缀，但内容像事实
                     if "|" not in line and len(line) > 5:
                         shards.append(line)
 
                 # 应用氛围调整
-                db_manager.update_mood(group_id, mood_adjustment)
+                await db_manager.update_mood(group_id, mood_adjustment)
 
                 if shards:
-                    # 批量获取向量
                     vectors = await get_embeddings(shards)
                     for i, shard in enumerate(shards):
-                        vector_db.add_memory(
-                            group_id=group_id, 
-                            text=f"[碎片] {shard}", 
+                        await vector_db.add_memory(
+                            group_id=group_id,
+                            text=f"[碎片] {shard}",
                             vector=vectors[i],
-                            metadata={"type": "shard"}
+                            metadata={"type": "shard"},
                         )
-                    
+
                     logger.info(f"群 {group_id} 记忆固化完成：提取了 {len(shards)} 条碎片")
 
                 # 4. 标记这些原始消息为已处理
-                db_manager.mark_as_processed(msg_ids)
+                await db_manager.mark_as_processed(msg_ids)
 
         except Exception as e:
             logger.error(f"记忆固化失败 (群 {group_id}): {e}", exc_info=True)

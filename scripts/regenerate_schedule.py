@@ -11,7 +11,7 @@ from src.aimodel.reply.personality import personality_manager
 async def main():
     print("🚀 开始为所有群组重新生成碎片化作息表...")
     
-    groups = db_manager.get_all_groups()
+    groups = await db_manager.get_all_groups()
     if not groups:
         print("⚠️ 数据库中没有找到任何已激活的群组。")
         return

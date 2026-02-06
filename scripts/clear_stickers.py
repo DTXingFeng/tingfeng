@@ -15,7 +15,7 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-def main():
+async def main():
     print("=" * 60)
     print("表情包缓存清理工具")
     print("=" * 60)
@@ -47,7 +47,7 @@ def main():
     confirm = input("确定要清空吗？(输入 'yes' 确认): ")
     
     if confirm.lower() == 'yes':
-        count = db_manager.clear_all_stickers()
+        count = await db_manager.clear_all_stickers()
         logger.info(f"已清空 {count} 个表情包缓存")
         print(f"✅ 已清空 {count} 个表情包缓存")
         print()
@@ -58,4 +58,5 @@ def main():
     print()
 
 if __name__ == "__main__":
-    main()
+    import asyncio
+    asyncio.run(main())
