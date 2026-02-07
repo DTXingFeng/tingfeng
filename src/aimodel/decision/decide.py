@@ -65,8 +65,8 @@ async def should_i_reply(
     history_str = "\n".join(history)
 
     # 3. 检索相关记忆与知识
-    user_profile = await db_manager.get_user_impression(group_id, user_name)
-    user_specific_memories = await db_manager.get_user_specific_memories(group_id, user_name, limit=3)
+    user_profile = await db_manager.get_user_impression(group_id, user_id) if user_id else None
+    user_specific_memories = await db_manager.get_user_specific_memories(group_id, user_id, limit=3) if user_id else []
 
     # 注入高频黑话（只使用频率>=30的已验证黑话）
     learned_slangs = await db_manager.get_slang_candidates(group_id, min_freq=30, stage=2)
@@ -170,13 +170,19 @@ async def should_i_reply(
                 f"[上下文管理] 决策模型: {model_alias}, 使用tokens: {prompt_tokens}/{context_manager.get_model_max_tokens(model_alias)}"
             )
 
-        response = await client.chat.completions.create(
+        stream = await client.chat.completions.create(
             model=creds["model"],
             messages=[{"role": "user", "content": optimized_prompt}],
             response_format={"type": "json_object"},
+            stream=True,
         )
 
-        content = response.choices[0].message.content.strip()
+        content = ""
+        async for chunk in stream:
+            if chunk.choices and chunk.choices[0].delta.content:
+                content += chunk.choices[0].delta.content
+        
+        content = content.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:

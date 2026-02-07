@@ -109,7 +109,7 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
     if not creds:
         return f"找不到模型别名 '{model_alias}' 的配置"
 
-    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=60.0)
+    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
     # 4. 准备提示词
     gif_hint = "（这张图片是一张动图/GIF 的多帧采样拼接图，请分析其动作序列和变化过程）" if is_gif else ""

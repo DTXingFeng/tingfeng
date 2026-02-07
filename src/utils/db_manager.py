@@ -296,30 +296,30 @@ class DBManager:
             row = await cursor.fetchone()
             return row[0] if row else None
 
-    async def add_user_specific_memory(self, group_id: int, user_name: str, content: str):
+    async def add_user_specific_memory(self, group_id: int, user_id: int, user_name: str, content: str):
         """为特定用户增加一条具体记忆点"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute(
-                "SELECT id FROM user_memories WHERE group_id = ? AND user_name = ? AND content = ?",
-                (group_id, user_name, content),
+                "SELECT id FROM user_memories WHERE group_id = ? AND user_id = ? AND content = ?",
+                (group_id, user_id, content),
             )
             if await cursor.fetchone():
                 return
 
             await cursor.execute(
-                "INSERT INTO user_memories (group_id, user_name, content) VALUES (?, ?, ?)",
-                (group_id, user_name, content),
+                "INSERT INTO user_memories (group_id, user_id, user_name, content) VALUES (?, ?, ?, ?)",
+                (group_id, user_id, user_name, content),
             )
             await conn.commit()
 
-    async def get_user_specific_memories(self, group_id: int, user_name: str, limit: int = 5) -> List[str]:
+    async def get_user_specific_memories(self, group_id: int, user_id: int, limit: int = 5) -> List[str]:
         """获取特定用户的多个记忆点"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute(
-                "SELECT content FROM user_memories WHERE group_id = ? AND user_name = ? ORDER BY created_at DESC LIMIT ?",
-                (group_id, user_name, limit),
+                "SELECT content FROM user_memories WHERE group_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (group_id, user_id, limit),
             )
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
@@ -476,13 +476,13 @@ class DBManager:
             )
             await conn.commit()
 
-    async def get_user_relationship(self, group_id: int, user_name: str) -> Dict[str, any]:
+    async def get_user_relationship(self, group_id: int, user_id: int) -> Dict[str, any]:
         """获取用户关系数据"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute(
-                "SELECT favorability, status FROM user_relationships WHERE group_id = ? AND user_name = ?",
-                (group_id, user_name),
+                "SELECT favorability, status FROM user_relationships WHERE group_id = ? AND user_id = ?",
+                (group_id, user_id),
             )
             row = await cursor.fetchone()
             if row:
@@ -490,10 +490,10 @@ class DBManager:
             return {"favorability": 50, "status": "陌生人"}
 
     async def update_user_relationship(
-        self, group_id: int, user_name: str, delta_favorability: int = 0, new_status: str = None
+        self, group_id: int, user_id: int, user_name: str, delta_favorability: int = 0, new_status: str = None
     ) -> Dict[str, any]:
         """更新用户好感度和关系状态"""
-        current = await self.get_user_relationship(group_id, user_name)
+        current = await self.get_user_relationship(group_id, user_id)
         new_fav = max(0, min(100, current["favorability"] + delta_favorability))
 
         if new_status is None:
@@ -512,14 +512,15 @@ class DBManager:
             cursor = await conn.cursor()
             await cursor.execute(
                 """
-                INSERT INTO user_relationships (group_id, user_name, favorability, status, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(group_id, user_name) DO UPDATE SET
+                INSERT INTO user_relationships (group_id, user_id, user_name, favorability, status, updated_at)
+                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id, user_id) DO UPDATE SET
+                user_name = excluded.user_name,
                 favorability = excluded.favorability,
                 status = excluded.status,
                 updated_at = CURRENT_TIMESTAMP
             """,
-                (group_id, user_name, new_fav, new_status),
+                (group_id, user_id, user_name, new_fav, new_status),
             )
             await conn.commit()
         return {"favorability": new_fav, "status": new_status}
@@ -703,17 +704,14 @@ class DBManager:
 
             return [user_name]
 
-    async def get_user_impression_cross_group(self, group_id: int, user_name: str) -> Optional[str]:
+    async def get_user_impression_cross_group(self, group_id: int, user_id: int) -> Optional[str]:
         """获取用户印象（跨群查询）"""
-        all_names = await self.get_all_names_for_user(group_id, user_name)
-
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-
-            placeholders = ",".join(["?" for _ in all_names])
+            
             await cursor.execute(
-                f"SELECT impression FROM user_profiles WHERE user_name IN ({placeholders}) ORDER BY updated_at DESC",
-                all_names,
+                "SELECT impression FROM user_profiles WHERE user_id = ? ORDER BY updated_at DESC",
+                (user_id,)
             )
 
             rows = await cursor.fetchall()
@@ -722,32 +720,26 @@ class DBManager:
 
             return None
 
-    async def get_user_specific_memories_cross_group(self, group_id: int, user_name: str, limit: int = 5) -> List[str]:
+    async def get_user_specific_memories_cross_group(self, group_id: int, user_id: int, limit: int = 5) -> List[str]:
         """获取用户具体记忆（跨群查询）"""
-        all_names = await self.get_all_names_for_user(group_id, user_name)
-
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-
-            placeholders = ",".join(["?" for _ in all_names])
+            
             await cursor.execute(
-                f"SELECT content FROM user_memories WHERE user_name IN ({placeholders}) ORDER BY created_at DESC LIMIT ?",
-                all_names + [limit],
+                "SELECT content FROM user_memories WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit),
             )
 
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
-    async def get_user_relationship_cross_group(self, group_id: int, user_name: str) -> Dict[str, any]:
+    async def get_user_relationship_cross_group(self, group_id: int, user_id: int) -> Dict[str, any]:
         """获取用户关系（跨群查询）"""
-        all_names = await self.get_all_names_for_user(group_id, user_name)
-
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-
-            placeholders = ",".join(["?" for _ in all_names])
+            
             await cursor.execute(
-                f"SELECT favorability, status FROM user_relationships WHERE user_name IN ({placeholders})", all_names
+                "SELECT favorability, status FROM user_relationships WHERE user_id = ?", (user_id,)
             )
 
             rows = await cursor.fetchall()

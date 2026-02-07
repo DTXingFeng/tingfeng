@@ -88,7 +88,7 @@ class PersonalityManager:
         if not creds:
             return ""
 
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=20.0)
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
         history_context = "\n".join(history[-5:])  # 只取最近5条参考
         mood_color = self.get_mood_color(mood_value)
@@ -117,13 +117,20 @@ class PersonalityManager:
                 text=thought_prompt, model_alias=model_alias, max_output_tokens=150
             )
 
-            response = await client.chat.completions.create(
+            stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=150,
                 temperature=0.8,
+                stream=True,
             )
-            thoughts = response.choices[0].message.content.strip()
+            
+            thoughts = ""
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    thoughts += chunk.choices[0].delta.content
+            
+            thoughts = thoughts.strip()
             # 更新到数据库
             await db_manager.update_personality_state(group_id, thoughts=thoughts)
             return thoughts
@@ -197,7 +204,7 @@ class PersonalityManager:
         if not creds:
             return []
 
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=60.0)
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
         schedule_prompt = f"""
 你现在是 {bot_config.bot_name} 的时间管理模块。请根据以下人格设定，为她生成一份今日的“极致碎片化作息表”。
@@ -222,14 +229,21 @@ class PersonalityManager:
                 text=schedule_prompt, model_alias=model_alias, max_output_tokens=1000
             )
 
-            response = await client.chat.completions.create(
+            stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=1000,
                 temperature=0.7,
                 response_format={"type": "json_object"},
+                stream=True,
             )
-            result = response.choices[0].message.content.strip()
+            
+            result = ""
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    result += chunk.choices[0].delta.content
+            
+            result = result.strip()
 
             # 解析 JSON 并处理各种可能的格式
             try:
@@ -298,7 +312,7 @@ class PersonalityManager:
         if not creds:
             return
 
-        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=60.0)
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
         history_str = "\n".join(history[-20:])  # 采样最近 20 条
 
@@ -324,14 +338,21 @@ class PersonalityManager:
                 text=mimicry_prompt, model_alias=model_alias, max_output_tokens=500
             )
 
-            response = await client.chat.completions.create(
+            stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=500,
                 temperature=0.3,
                 response_format={"type": "json_object"},
+                stream=True,
             )
-            result = response.choices[0].message.content.strip()
+            
+            result = ""
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    result += chunk.choices[0].delta.content
+            
+            result = result.strip()
 
             try:
                 cleaned_result = extract_json_from_markdown(result)
@@ -426,14 +447,21 @@ class PersonalityManager:
                 text=mining_prompt, model_alias=model_alias, max_output_tokens=500
             )
 
-            response = await client.chat.completions.create(
+            stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=500,
                 temperature=0.3,
                 response_format={"type": "json_object"},
+                stream=True,
             )
-            result = response.choices[0].message.content.strip()
+            
+            result = ""
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    result += chunk.choices[0].delta.content
+            
+            result = result.strip()
 
             try:
                 cleaned_result = extract_json_from_markdown(result)
@@ -553,20 +581,27 @@ class PersonalityManager:
                 text=refine_prompt, model_alias=model_alias, max_output_tokens=200
             )
 
-            response = await client.chat.completions.create(
+            stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=200,
                 temperature=0.2,
+                stream=True,
             )
-            final_def = response.choices[0].message.content.strip()
+            
+            final_def = ""
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    final_def += chunk.choices[0].delta.content
+            
+            final_def = final_def.strip()
             await db_manager.update_slang_candidate(
                 group_id, phrase, delta_freq=0, stage=new_stage, definition=final_def
             )
         except Exception as e:
             logger.error(f"黑话定义修正失败: {e}", exc_info=True)
 
-    async def evolve_personality(self, group_id: int, user_name: str, user_msg: str, bot_reply: str = None):
+    async def evolve_personality(self, group_id: int, user_name: str, user_msg: str, user_id: int = None, bot_reply: str = None):
         """
         根据交互进化性格特征值和用户关系。
         """
@@ -596,7 +631,8 @@ class PersonalityManager:
             delta_fav = -1
 
         if delta_fav != 0:
-            await db_manager.update_user_relationship(group_id, user_name, delta_favorability=delta_fav)
+            if user_id:
+                await db_manager.update_user_relationship(group_id, user_id, user_name, delta_favorability=delta_fav)
 
     async def update_group_vibe(self, group_id: int):
         """
@@ -640,14 +676,21 @@ class PersonalityManager:
                 text=vibe_prompt, model_alias=model_alias, max_output_tokens=300
             )
 
-            response = await client.chat.completions.create(
+            stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
                 max_tokens=300,
                 temperature=0.5,
                 response_format={"type": "json_object"},
+                stream=True,
             )
-            vibe_json = response.choices[0].message.content.strip()
+            
+            vibe_json = ""
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    vibe_json += chunk.choices[0].delta.content
+            
+            vibe_json = vibe_json.strip()
 
             # 验证并规范化 JSON 格式
             try:

@@ -26,7 +26,15 @@ async def initialize_creator_memory(group_id: int):
     if group_id in _initialized_groups:
         return
 
-    existing_memories = await db_manager.get_user_specific_memories(group_id, creator_name, limit=1)
+    # 尝试获取创造者的 user_id
+    creator_id = bot_config.creator_id
+    if not creator_id:
+        creator_id = await db_manager.get_user_id_by_name(group_id, creator_name)
+    
+    existing_memories = []
+    if creator_id:
+        existing_memories = await db_manager.get_user_specific_memories(group_id, creator_id, limit=1)
+    
     if existing_memories:
         logger.info(f"创造者 '{creator_name}' 的记忆已存在，跳过初始化")
         _initialized_groups.add(group_id)
@@ -60,8 +68,11 @@ async def initialize_creator_memory(group_id: int):
     # 4. 添加用户印象
     try:
         impression = f"{creator_name}是{bot_config.bot_name}的创造者和造物主，是{bot_config.bot_name}存在的原因。{bot_config.bot_name}对他有依赖感，偶尔会调侃他，但带有独特的亲昵感。他是{bot_config.bot_name}生命中最核心的、无法被他人替代的印记。"
-        await db_manager.update_user_impression(group_id, creator_name, impression)
-        logger.info("已更新创造者用户印象")
+        if creator_id:
+            await db_manager.update_user_impression(group_id, creator_id, creator_name, impression)
+            logger.info("已更新创造者用户印象")
+        else:
+            logger.warning("无法更新创造者印象：未找到创造者的 user_id，请让创造者先在群内发言")
     except Exception as e:
         logger.error(f"更新用户印象失败: {e}")
 
@@ -72,9 +83,12 @@ async def initialize_creator_memory(group_id: int):
             f"{creator_name}用代码编织了{bot_config.bot_name}的灵魂",
             f"{creator_name}是{bot_config.bot_name}的大冤种创造者",
         ]
-        for memory in user_memories:
-            await db_manager.add_user_specific_memory(group_id, creator_name, memory)
-        logger.info(f"已添加 {len(user_memories)} 条创造者专属记忆")
+        if creator_id:
+            for memory in user_memories:
+                await db_manager.add_user_specific_memory(group_id, creator_id, creator_name, memory)
+            logger.info(f"已添加 {len(user_memories)} 条创造者专属记忆")
+        else:
+            logger.warning("无法添加创造者专属记忆：未找到创造者的 user_id")
     except Exception as e:
         logger.error(f"添加用户专属记忆失败: {e}")
 
@@ -86,19 +100,27 @@ async def initialize_creator_memory(group_id: int):
     except Exception as e:
         logger.error(f"添加知识三元组失败: {e}")
 
-    # 7. 设置创造者关系（如果配置了 creator_id，也可以更新 ID 映射）
+    # 7. 设置创造者关系
     try:
-        await db_manager.update_user_relationship(group_id, creator_name, delta_favorability=20, new_status="死党")
-        logger.info("已设置创造者关系状态为'死党'")
+        if creator_id:
+            await db_manager.update_user_relationship(group_id, creator_id, creator_name, delta_favorability=20, new_status="死党")
+            logger.info("已设置创造者关系状态为'死党'")
+        else:
+            logger.warning("无法设置创造者关系：未找到创造者的 user_id")
     except Exception as e:
         logger.error(f"更新用户关系失败: {e}")
 
+    # 8. 确保 user_id 映射存在
     if bot_config.creator_id:
         try:
             await db_manager.update_user_id_map(group_id, creator_name, bot_config.creator_id)
             logger.info(f"已映射创造者ID: {creator_name} -> {bot_config.creator_id}")
         except Exception as e:
             logger.error(f"更新用户ID映射失败: {e}")
+    
+    # 9. 如果从数据库查到的 creator_id 和配置不一致，更新配置
+    if creator_id and creator_id != bot_config.creator_id:
+        logger.info(f"检测到创造者ID: {creator_id}，建议更新到配置文件中")
 
     # 标记该群组已初始化
     _initialized_groups.add(group_id)
@@ -118,6 +140,7 @@ async def initialize_all_groups():
 
     logger.info(f"发现 {len(all_groups)} 个活跃群组，开始初始化创造者记忆...")
 
+    # 为每个群组初始化创造者记忆
     for group_id in all_groups:
         try:
             await initialize_creator_memory(group_id)
@@ -125,14 +148,3 @@ async def initialize_all_groups():
             logger.error(f"群组 {group_id} 记忆初始化失败: {e}")
 
     logger.info("所有群组的创造者记忆初始化完成！")
-
-
-async def ensure_creator_memory(group_id: int):
-    """
-    确保群组中存在创造者的记忆
-    如果不存在则初始化
-    """
-    if not bot_config.creator_name:
-        return
-
-    await initialize_creator_memory(group_id)

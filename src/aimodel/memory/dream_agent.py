@@ -24,7 +24,7 @@ async def dream_and_optimize(group_id: int):
     creds = ai_config_manager.get_model_credentials(model_alias)
     if not creds:
         return
-    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=60.0)
+    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
     # 构造复盘数据摘要
     triplet_str = "\n".join([f"- {t['subject']} --({t['predicate']})--> {t['object']}" for t in triplets])

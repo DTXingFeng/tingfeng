@@ -75,17 +75,23 @@ class GetUserMemoriesTool(BaseTool):
         Returns:
             dict: 用户记忆信息
         """
+        # 获取 user_id
+        user_id = await db_manager.get_user_id_by_name(group_id, user_name)
+        if not user_id:
+            raise ValueError(f"未找到用户 '{user_name}' 的 QQ 号，请让该用户先在群内发言")
+        
         # 获取用户印象（跨群查询）
-        impression = await db_manager.get_user_impression_cross_group(group_id, user_name)
+        impression = await db_manager.get_user_impression_cross_group(group_id, user_id)
 
         # 获取具体记忆点（跨群查询）
-        memories = await db_manager.get_user_specific_memories_cross_group(group_id, user_name, limit=memory_limit)
+        memories = await db_manager.get_user_specific_memories_cross_group(group_id, user_id, limit=memory_limit)
 
         # 获取关系状态（跨群查询）
-        relationship = await db_manager.get_user_relationship_cross_group(group_id, user_name)
+        relationship = await db_manager.get_user_relationship_cross_group(group_id, user_id)
 
         return {
             "user_name": user_name,
+            "user_id": user_id,
             "impression": impression,
             "memories": memories,
             "relationship": relationship,
@@ -119,7 +125,12 @@ class AddMemoryTool(BaseTool):
         Returns:
             dict: 添加结果
         """
-        await db_manager.add_user_specific_memory(group_id, user_name, content)
+        # 获取 user_id
+        user_id = await db_manager.get_user_id_by_name(group_id, user_name)
+        if user_id:
+            await db_manager.add_user_specific_memory(group_id, user_id, user_name, content)
+        else:
+            raise ValueError(f"未找到用户 '{user_name}' 的 QQ 号，请让该用户先在群内发言")
 
         # 同时添加到向量数据库
         try:

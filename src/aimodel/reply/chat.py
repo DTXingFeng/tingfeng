@@ -303,75 +303,109 @@ async def get_chat_reply(
             f"[上下文管理] 模型: {model_alias}, 使用tokens: {total_tokens}/{context_manager.get_model_max_tokens(model_alias)}"
         )
 
-    # 5. 调用 AI（支持 MCP function calling）
+    # 5. 调用 AI（全面使用流式传输）
     client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
     try:
         # 获取 MCP 工具定义
         mcp_tools = tool_registry.get_all_definitions()
-
-        # 如果有 MCP 工具，启用 tool calling
+        
+        # 构建请求参数
+        stream_params = {
+            "model": creds["model"],
+            "messages": optimized_messages,
+            "max_tokens": 500,
+            "temperature": 0.7,
+            "stream": True,
+        }
+        
         if mcp_tools:
-            response = await client.chat.completions.create(
-                model=creds["model"],
-                messages=optimized_messages,
-                tools=mcp_tools,
-                tool_choice="auto",  # 让 LLM 自动决定是否调用工具
-                max_tokens=500,
-                temperature=0.7,
-            )
-        else:
-            response = await client.chat.completions.create(
-                model=creds["model"], messages=optimized_messages, max_tokens=500, temperature=0.7
-            )
-
-        reply_content = response.choices[0].message.content or ""
-        reply_content = reply_content.strip()
-
-        # 处理 tool calls
-        tool_calls = response.choices[0].message.tool_calls
-        if tool_calls:
-            for tool_call in tool_calls:
-                tool_name = tool_call.function.name
-                tool_args = tool_call.function.arguments
-
+            stream_params["tools"] = mcp_tools
+            stream_params["tool_choice"] = "auto"
+        
+        # 第一次流式调用：检查是否需要工具调用
+        stream = await client.chat.completions.create(**stream_params)
+        
+        reply_content = ""
+        tool_calls_dict = {}
+        
+        async for chunk in stream:
+            # 收集文本内容
+            if chunk.choices and chunk.choices[0].delta.content:
+                reply_content += chunk.choices[0].delta.content
+            
+            # 收集 tool_calls（可能分多个 chunk 返回，需要根据 index 累积）
+            if chunk.choices and chunk.choices[0].delta.tool_calls:
+                for tool_call_chunk in chunk.choices[0].delta.tool_calls:
+                    idx = tool_call_chunk.index
+                    if idx not in tool_calls_dict:
+                        tool_calls_dict[idx] = {
+                            "id": tool_call_chunk.id,
+                            "name": tool_call_chunk.function.name if tool_call_chunk.function.name else "",
+                            "arguments": tool_call_chunk.function.arguments if tool_call_chunk.function.arguments else "",
+                        }
+                    else:
+                        if tool_call_chunk.function.name:
+                            tool_calls_dict[idx]["name"] = tool_call_chunk.function.name
+                        if tool_call_chunk.function.arguments:
+                            tool_calls_dict[idx]["arguments"] += tool_call_chunk.function.arguments
+        
+        # 如果有工具调用，执行并再次流式生成
+        if tool_calls_dict:
+            logger.info(f"检测到 {len(tool_calls_dict)} 个工具调用")
+            
+            for idx, tool_call_data in tool_calls_dict.items():
+                tool_name = tool_call_data["name"]
+                tool_args = tool_call_data["arguments"]
+                
+                if not tool_name or not tool_args:
+                    continue
+                
                 logger.info(f"LLM 调用工具: {tool_name}, 参数: {tool_args}")
-
-                # 解析参数
+                
                 import json
-
+                
                 try:
                     if isinstance(tool_args, str):
                         tool_args = json.loads(tool_args)
                 except json.JSONDecodeError:
                     logger.error(f"工具参数解析失败: {tool_args}")
                     tool_args = {}
-
+                
                 # 执行工具
                 tool_result = await tool_registry.execute(tool_name, **tool_args)
-
+                
                 if tool_result.get("success"):
                     result_data = tool_result.get("data", {})
                     logger.info(f"工具 {tool_name} 执行成功: {result_data}")
-
-                    # 将工具结果返回给 LLM，让它继续对话
+                    
+                    # 将工具结果返回给 LLM
                     tool_result_message = {
                         "role": "system",
                         "content": f"### 工具执行结果（{tool_name}）：\n{json.dumps(result_data, ensure_ascii=False)}",
                     }
-
-                    # 再次调用 LLM，包含工具结果
-                    response = await client.chat.completions.create(
+                    
+                    # 再次使用流式传输生成最终回复
+                    stream = await client.chat.completions.create(
                         model=creds["model"],
                         messages=optimized_messages + [tool_result_message],
                         max_tokens=500,
                         temperature=0.7,
+                        stream=True,
                     )
-                    reply_content = response.choices[0].message.content or ""
+                    
+                    reply_content = ""
+                    async for chunk in stream:
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            reply_content += chunk.choices[0].delta.content
                     reply_content = reply_content.strip()
+                    break
                 else:
                     logger.error(f"工具 {tool_name} 执行失败: {tool_result['error']}")
                     reply_content = f"工具调用失败了...（扶额）"
+        else:
+            # 没有工具调用，使用收集到的文本
+            reply_content = reply_content.strip()
 
         # 1. 提取并处理表情包标签
         sticker_url = None

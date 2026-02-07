@@ -33,17 +33,20 @@ class UserProfileTool(BaseTool):
         Returns:
             dict: 用户画像信息
         """
-        # 获取用户印象（跨群查询）
-        impression = await db_manager.get_user_impression_cross_group(group_id, user_name)
-
-        # 获取关系（跨群查询）
-        relationship = await db_manager.get_user_relationship_cross_group(group_id, user_name)
-
-        # 获取记忆数量（跨群查询）
-        memories = await db_manager.get_user_specific_memories_cross_group(group_id, user_name, limit=100)
-
         # 获取用户 ID（如果有）
         user_id = await db_manager.get_user_id_by_name(group_id, user_name)
+        
+        if not user_id:
+            raise ValueError(f"未找到用户 '{user_name}' 的 QQ 号，请让该用户先在群内发言")
+        
+        # 获取用户印象（跨群查询）
+        impression = await db_manager.get_user_impression_cross_group(group_id, user_id)
+
+        # 获取关系（跨群查询）
+        relationship = await db_manager.get_user_relationship_cross_group(group_id, user_id)
+
+        # 获取记忆数量（跨群查询）
+        memories = await db_manager.get_user_specific_memories_cross_group(group_id, user_id, limit=100)
 
         return {
             "user_name": user_name,
@@ -51,7 +54,7 @@ class UserProfileTool(BaseTool):
             "impression": impression,
             "relationship": relationship,
             "memory_count": len(memories),
-            "is_creator": user_name == bot_config.creator_name if bot_config.creator_name else False,
+            "is_creator": user_id == bot_config.creator_id if bot_config.creator_id else False,
         }
 
 

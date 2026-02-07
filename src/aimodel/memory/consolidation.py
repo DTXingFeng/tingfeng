@@ -103,12 +103,18 @@ async def consolidate_memories(group_id: int):
                     parts = line.split("|")
                     if len(parts) >= 3:
                         u_name, u_profile = parts[1].strip(), parts[2].strip()
-                        await db_manager.update_user_impression(group_id, u_name, u_profile)
+                        # 尝试获取 user_id
+                        u_id = await db_manager.get_user_id_by_name(group_id, u_name)
+                        if u_id:
+                            await db_manager.update_user_impression(group_id, u_id, u_name, u_profile)
                 elif line.startswith("STORY|"):
                     parts = line.split("|")
                     if len(parts) >= 3:
                         u_name, u_story = parts[1].strip(), parts[2].strip()
-                        await db_manager.add_user_specific_memory(group_id, u_name, u_story)
+                        # 尝试获取 user_id
+                        u_id = await db_manager.get_user_id_by_name(group_id, u_name)
+                        if u_id:
+                            await db_manager.add_user_specific_memory(group_id, u_id, u_name, u_story)
                 elif line.startswith("TRIPLET|"):
                     parts = line.split("|")
                     if len(parts) >= 5:

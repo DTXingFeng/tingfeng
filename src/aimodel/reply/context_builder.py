@@ -51,12 +51,12 @@ class ReplyContextBuilder:
             from src.aimodel.memory.vector_db import vector_db
 
             context["history"] = await db_manager.get_chat_log(group_id, limit=20)
-            context["user_profile"] = await db_manager.get_user_impression_cross_group(group_id, user_name)
+            context["user_profile"] = await db_manager.get_user_impression_cross_group(group_id, user_id) if user_id else None
             context["user_specific_memories"] = await db_manager.get_user_specific_memories_cross_group(
-                group_id, user_name, limit=5
-            )
+                group_id, user_id, limit=5
+            ) if user_id else []
 
-            relationship_data = await db_manager.get_user_relationship_cross_group(group_id, user_name)
+            relationship_data = await db_manager.get_user_relationship_cross_group(group_id, user_id) if user_id else {"favorability": 50, "status": "陌生人"}
             context["relationship_data"] = relationship_data
 
             context["personality_state"] = await db_manager.get_personality_state(group_id)

@@ -95,6 +95,8 @@ group_contexts = {}
 active_deferred_tasks = {}
 # 记录每个群组是否正在进行 AI 决策，防止并发冲突
 deciding_groups = set()
+# 记录每个群组是否正在生成回复（防止在生成期间进行新决策）
+generating_reply_groups = set()
 # 记录每个群最后一次进行黑话挖掘的时间（避免频繁调用）
 last_slang_mining_times = {}
 # 黑话挖掘最小间隔时间（秒）
@@ -122,22 +124,25 @@ async def process_my_logic(
     """
     处理消息回复逻辑
     """
-    # 消息去重：检查是否已处理过该消息
-    message_key = f"{group_id}:{message_id}"
-    if message_key in processed_messages:
-        logger.debug(f"消息 {message_id} 已处理过，跳过重复回复")
-        return
-    
-    processed_messages.add(message_key)
-    
-    # 定期清理旧的消息 ID，防止内存泄漏（保留最近 10000 条）
-    if len(processed_messages) > 10000:
-        # 保留最近的一半
-        old_list = list(processed_messages)
-        processed_messages.clear()
-        processed_messages.update(old_list[-5000:])
+    # 标记开始生成回复
+    generating_reply_groups.add(group_id)
     
     try:
+        # 消息去重：检查是否已处理过该消息
+        message_key = f"{group_id}:{message_id}"
+        if message_key in processed_messages:
+            logger.debug(f"消息 {message_id} 已处理过，跳过重复回复")
+            return
+        
+        processed_messages.add(message_key)
+        
+        # 定期清理旧的消息 ID，防止内存泄漏（保留最近 10000 条）
+        if len(processed_messages) > 10000:
+            # 保留最近的一半
+            old_list = list(processed_messages)
+            processed_messages.clear()
+            processed_messages.update(old_list[-5000:])
+        
         reply_data = await get_chat_reply(
             group_id, card, llm_text, user_id=user_id, reply_message_id=reply_message_id, bot=bot
         )
@@ -211,12 +216,17 @@ async def process_my_logic(
                             logger.warning(f"表情包 '{tag}' 的 URL 已失效，将从缓存中移除")
                             # TODO: 可以在这里添加删除过期表情包的逻辑
 
-        logger.info(f"[{role}] {card}({user_id}) 唤醒了{bot_config.bot_name}")
-        logger.debug(f"清洗后文本 (LLM): {llm_text}")
-        logger.debug(f"{bot_config.bot_name}回复: {reply_text}")
+            logger.info(f"[{role}] {card}({user_id}) 唤醒了{bot_config.bot_name}")
+            logger.debug(f"清洗后文本 (LLM): {llm_text}")
+            logger.debug(f"{bot_config.bot_name}回复: {reply_text}")
 
     except Exception as e:
         logger.error(f"处理消息时发生异常: {e}", exc_info=True)
+    finally:
+        # 回复处理完成，移除生成状态并更新冷却时间
+        generating_reply_groups.discard(group_id)
+        last_decision_times[group_id] = time.time()
+        logger.debug(f"群组 {group_id} 回复完成，冷却时间已更新")
 
 
 async def deferred_decision_worker(group_id: int, bot: Bot):
@@ -231,7 +241,12 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
 
             if remaining <= 0:
                 # 冷却期已过，检查是否有待处理消息
-                if pending_decisions.get(group_id) and group_id not in deciding_groups:
+                # 确保当前没有正在进行的决策，也没有正在生成的回复
+                if (
+                    pending_decisions.get(group_id) 
+                    and group_id not in deciding_groups 
+                    and group_id not in generating_reply_groups
+                ):
                     ctx = group_contexts.get(group_id)
                     if ctx:
                         # 标记为已处理，防止重复触发
@@ -239,8 +254,7 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                         deciding_groups.add(group_id)
 
                         try:
-                            last_decision_times[group_id] = time.time()
-                            # 执行决策
+                            # 执行决策（注意：不在此时更新冷却时间，而是在回复完成后更新）
                             decision = await should_i_reply(
                                 group_id, ctx["display_name"], ctx["llm_text"], is_at_me=False, user_id=ctx["user_id"]
                             )
@@ -417,7 +431,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             await vector_db.add_memory(group_id, msg_to_store, vectors[0])
 
             # 2. 性格进化与好感度更新
-            await personality_manager.evolve_personality(group_id, display_name, llm_text)
+            await personality_manager.evolve_personality(group_id, display_name, llm_text, user_id=user_id)
 
             # 3. 实时模仿与黑话挖掘 (采样最近 20 条历史)
             history = await db_manager.get_chat_log(group_id, limit=20)
@@ -481,8 +495,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         if group_id not in deciding_groups:
             deciding_groups.add(group_id)
             try:
-                last_decision_times[group_id] = time.time()
-                # 执行决策评估心情
+                # 执行决策评估心情（注意：不在此时更新冷却时间，而是在回复完成后更新）
                 decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=True, user_id=user_id)
 
                 # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
@@ -513,13 +526,13 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
         if current_time - last_time >= bot_config.decision_interval:
             # 过了冷却期，直接触发决策判断
-            # 确保当前没有正在进行的决策
-            if group_id not in deciding_groups:
+            # 确保当前没有正在进行的决策，也没有正在生成的回复
+            if group_id not in deciding_groups and group_id not in generating_reply_groups:
                 deciding_groups.add(group_id)
                 try:
-                    last_decision_times[group_id] = current_time
                     pending_decisions[group_id] = False
 
+                    # 执行决策（注意：不在此时更新冷却时间，而是在回复完成后更新）
                     decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=False, user_id=user_id)
 
                     # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
