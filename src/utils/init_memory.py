@@ -69,7 +69,7 @@ async def initialize_creator_memory(group_id: int):
     try:
         impression = f"{creator_name}是{bot_config.bot_name}的创造者和造物主，是{bot_config.bot_name}存在的原因。{bot_config.bot_name}对他有依赖感，偶尔会调侃他，但带有独特的亲昵感。他是{bot_config.bot_name}生命中最核心的、无法被他人替代的印记。"
         if creator_id:
-            await db_manager.update_user_impression(group_id, creator_name, impression)
+            await db_manager.update_user_impression(group_id, creator_id, creator_name, impression)
             logger.info("已更新创造者用户印象")
         else:
             logger.warning("无法更新创造者印象：未找到创造者的 user_id，请让创造者先在群内发言")

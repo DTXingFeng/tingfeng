@@ -57,10 +57,11 @@ class DBManager:
                     """
                     CREATE TABLE IF NOT EXISTS user_profiles (
                         group_id INTEGER,
+                        user_id INTEGER,
                         user_name TEXT,
                         impression TEXT,
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (group_id, user_name)
+                        PRIMARY KEY (group_id, user_id)
                     )
                 """
                 )
@@ -82,6 +83,7 @@ class DBManager:
                     CREATE TABLE IF NOT EXISTS user_memories (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         group_id INTEGER,
+                        user_id INTEGER,
                         user_name TEXT,
                         content TEXT,
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -115,11 +117,12 @@ class DBManager:
                     """
                     CREATE TABLE IF NOT EXISTS user_relationships (
                         group_id INTEGER,
+                        user_id INTEGER,
                         user_name TEXT,
                         favorability INTEGER DEFAULT 50,
                         status TEXT DEFAULT '陌生人',
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        PRIMARY KEY (group_id, user_name)
+                        PRIMARY KEY (group_id, user_id)
                     )
                 """
                 )
@@ -270,28 +273,29 @@ class DBManager:
             )
             await conn.commit()
 
-    async def update_user_impression(self, group_id: int, user_name: str, impression: str):
+    async def update_user_impression(self, group_id: int, user_id: int, user_name: str, impression: str):
         """更新对某个用户的印象"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute(
                 """
-                INSERT INTO user_profiles (group_id, user_name, impression, updated_at)
-                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(group_id, user_name) DO UPDATE SET
+                INSERT INTO user_profiles (group_id, user_id, user_name, impression, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id, user_id) DO UPDATE SET
+                user_name = excluded.user_name,
                 impression = excluded.impression,
                 updated_at = CURRENT_TIMESTAMP
             """,
-                (group_id, user_name, impression),
+                (group_id, user_id, user_name, impression),
             )
             await conn.commit()
 
-    async def get_user_impression(self, group_id: int, user_name: str) -> Optional[str]:
+    async def get_user_impression(self, group_id: int, user_id: int) -> Optional[str]:
         """获取对某个用户的整体印象"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute(
-                "SELECT impression FROM user_profiles WHERE group_id = ? AND user_name = ?", (group_id, user_name)
+                "SELECT impression FROM user_profiles WHERE group_id = ? AND user_id = ?", (group_id, user_id)
             )
             row = await cursor.fetchone()
             return row[0] if row else None
