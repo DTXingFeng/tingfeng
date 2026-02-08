@@ -126,23 +126,23 @@ async def process_my_logic(
     """
     # 标记开始生成回复
     generating_reply_groups.add(group_id)
-    
+
     try:
         # 消息去重：检查是否已处理过该消息
         message_key = f"{group_id}:{message_id}"
         if message_key in processed_messages:
             logger.debug(f"消息 {message_id} 已处理过，跳过重复回复")
             return
-        
+
         processed_messages.add(message_key)
-        
+
         # 定期清理旧的消息 ID，防止内存泄漏（保留最近 10000 条）
         if len(processed_messages) > 10000:
             # 保留最近的一半
             old_list = list(processed_messages)
             processed_messages.clear()
             processed_messages.update(old_list[-5000:])
-        
+
         reply_data = await get_chat_reply(
             group_id, card, llm_text, user_id=user_id, reply_message_id=reply_message_id, bot=bot
         )
@@ -221,7 +221,12 @@ async def process_my_logic(
             logger.debug(f"{bot_config.bot_name}回复: {reply_text}")
 
     except Exception as e:
-        logger.error(f"处理消息时发生异常: {e}", exc_info=True)
+        error_msg = str(e)
+        try:
+            error_type = type(e).__name__
+        except:
+            error_type = "Exception"
+        logger.error(f"处理消息时发生异常 [{error_type}]: {error_msg}", exc_info=True)
     finally:
         # 回复处理完成，移除生成状态并更新冷却时间
         generating_reply_groups.discard(group_id)
@@ -243,8 +248,8 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                 # 冷却期已过，检查是否有待处理消息
                 # 确保当前没有正在进行的决策，也没有正在生成的回复
                 if (
-                    pending_decisions.get(group_id) 
-                    and group_id not in deciding_groups 
+                    pending_decisions.get(group_id)
+                    and group_id not in deciding_groups
                     and group_id not in generating_reply_groups
                 ):
                     ctx = group_contexts.get(group_id)
@@ -269,18 +274,17 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                             if decision.get("should_reply") and interest_score >= 0.4:
                                 # 记录 bot 回复行为
                                 await db_manager.record_bot_reply(
-                                    group_id, 
-                                    ctx["display_name"], 
-                                    is_at_bot=False, 
-                                    interest_score=interest_score
+                                    group_id, ctx["display_name"], is_at_bot=False, interest_score=interest_score
                                 )
                                 # 执行回复逻辑
+                                target_user = decision.get("reply_to_user", ctx["display_name"])
+                                target_msg = decision.get("target_message_content", ctx["llm_text"])
                                 await process_my_logic(
                                     bot=bot,
                                     event=ctx["event"],
                                     message_id=ctx["message_id"],
                                     text=ctx["text"],
-                                    llm_text=ctx["llm_text"],
+                                    llm_text=target_msg,  # 使用 AI 选择的消息内容
                                     normal_images=ctx["normal_images"],
                                     stickers=ctx["stickers"],
                                     flash_images=ctx["flash_images"],
@@ -288,7 +292,7 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     group_id=group_id,
                                     user_id=ctx["user_id"],
                                     nickname=ctx["nickname"],
-                                    card=decision.get("reply_to_user", ctx["display_name"]),
+                                    card=target_user,
                                     role=ctx["role"],
                                     raw_msg=ctx["raw_msg"],
                                     reply_message_id=ctx.get("reply_message_id"),  # 传递引用消息 ID
@@ -296,10 +300,7 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                             # 即使 AI 决定不回复，也有一定概率随机回复
                             elif random.random() < bot_config.reply_rate:
                                 await db_manager.record_bot_reply(
-                                    group_id, 
-                                    ctx["display_name"], 
-                                    is_at_bot=False, 
-                                    interest_score=0.2
+                                    group_id, ctx["display_name"], is_at_bot=False, interest_score=0.2
                                 )
                                 await process_my_logic(
                                     bot=bot,
@@ -505,14 +506,10 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
                 do_reply = True
                 target_user = decision.get("reply_to_user", display_name)
+                target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容
                 # 记录被艾特时的回复行为
                 interest_score = decision.get("interest_score", 0.8)
-                await db_manager.record_bot_reply(
-                    group_id, 
-                    display_name, 
-                    is_at_bot=True, 
-                    interest_score=interest_score
-                )
+                await db_manager.record_bot_reply(group_id, display_name, is_at_bot=True, interest_score=interest_score)
             finally:
                 deciding_groups.remove(group_id)
     else:
@@ -546,24 +543,17 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                         do_reply = True
                         # 记录回复行为
                         await db_manager.record_bot_reply(
-                            group_id, 
-                            display_name, 
-                            is_at_bot=False, 
-                            interest_score=interest_score
+                            group_id, display_name, is_at_bot=False, interest_score=interest_score
                         )
                     # 即使 AI 决定不回复，也有一定概率随机回复
                     elif random.random() < bot_config.reply_rate:
                         do_reply = True
-                        await db_manager.record_bot_reply(
-                            group_id, 
-                            display_name, 
-                            is_at_bot=False, 
-                            interest_score=0.2
-                        )
+                        await db_manager.record_bot_reply(group_id, display_name, is_at_bot=False, interest_score=0.2)
                     else:
                         do_reply = False
 
                     target_user = decision.get("reply_to_user", display_name)
+                    target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容
                 finally:
                     deciding_groups.remove(group_id)
         else:
@@ -584,7 +574,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         event=event,
         message_id=message_id,
         text=message_text,
-        llm_text=llm_text,
+        llm_text=target_msg,  # 使用 AI 选择的消息内容进行回复
         normal_images=normal_images,
         stickers=stickers,
         flash_images=flash_images,

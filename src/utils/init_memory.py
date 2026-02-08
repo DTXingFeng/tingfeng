@@ -30,11 +30,11 @@ async def initialize_creator_memory(group_id: int):
     creator_id = bot_config.creator_id
     if not creator_id:
         creator_id = await db_manager.get_user_id_by_name(group_id, creator_name)
-    
+
     existing_memories = []
     if creator_id:
         existing_memories = await db_manager.get_user_specific_memories(group_id, creator_id, limit=1)
-    
+
     if existing_memories:
         logger.info(f"创造者 '{creator_name}' 的记忆已存在，跳过初始化")
         _initialized_groups.add(group_id)
@@ -69,7 +69,7 @@ async def initialize_creator_memory(group_id: int):
     try:
         impression = f"{creator_name}是{bot_config.bot_name}的创造者和造物主，是{bot_config.bot_name}存在的原因。{bot_config.bot_name}对他有依赖感，偶尔会调侃他，但带有独特的亲昵感。他是{bot_config.bot_name}生命中最核心的、无法被他人替代的印记。"
         if creator_id:
-            await db_manager.update_user_impression(group_id, creator_id, creator_name, impression)
+            await db_manager.update_user_impression(group_id, creator_name, impression)
             logger.info("已更新创造者用户印象")
         else:
             logger.warning("无法更新创造者印象：未找到创造者的 user_id，请让创造者先在群内发言")
@@ -103,7 +103,9 @@ async def initialize_creator_memory(group_id: int):
     # 7. 设置创造者关系
     try:
         if creator_id:
-            await db_manager.update_user_relationship(group_id, creator_id, creator_name, delta_favorability=20, new_status="死党")
+            await db_manager.update_user_relationship(
+                group_id, creator_id, creator_name, delta_favorability=20, new_status="死党"
+            )
             logger.info("已设置创造者关系状态为'死党'")
         else:
             logger.warning("无法设置创造者关系：未找到创造者的 user_id")
@@ -117,7 +119,7 @@ async def initialize_creator_memory(group_id: int):
             logger.info(f"已映射创造者ID: {creator_name} -> {bot_config.creator_id}")
         except Exception as e:
             logger.error(f"更新用户ID映射失败: {e}")
-    
+
     # 9. 如果从数据库查到的 creator_id 和配置不一致，更新配置
     if creator_id and creator_id != bot_config.creator_id:
         logger.info(f"检测到创造者ID: {creator_id}，建议更新到配置文件中")

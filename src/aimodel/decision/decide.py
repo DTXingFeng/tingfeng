@@ -60,9 +60,14 @@ async def should_i_reply(
     traits = personality_state.get("traits", {})
     recent_thoughts = personality_state.get("recent_thoughts", "暂无")
 
-    # 2. 准备上下文 (获取最近 10 条消息)
-    history = await db_manager.get_chat_log(group_id, limit=10)
-    history_str = "\n".join(history)
+    # 2. 准备上下文 (获取最近 15 条消息，提供更多选择空间)
+    history = await db_manager.get_chat_log(group_id, limit=15)
+    
+    # 构建带索引的历史消息，方便 AI 选择
+    history_with_index = []
+    for idx, msg in enumerate(history):
+        history_with_index.append(f"[{idx}] {msg}")
+    history_str = "\n".join(history_with_index)
 
     # 3. 检索相关记忆与知识
     user_profile = await db_manager.get_user_impression(group_id, user_id) if user_id else None
@@ -97,6 +102,7 @@ async def should_i_reply(
     memory_str = "\n".join(memory_context) if memory_context else "暂无相关背景记忆。"
 
     # 4. 构造决策 Prompt
+    max_idx = len(history) - 1  # 历史消息的最大索引
     prompt = (
         f"你现在是群聊机器人'{bot_config.bot_name}'的感性大脑，负责决策和情感评估。\n"
         f"你的角色设定是：{bot_config.identity}\n"
@@ -109,23 +115,30 @@ async def should_i_reply(
         f"{slang_context}\n\n"
         "### 任务：\n"
         f"1. **理解上下文**：结合黑话库，深度解码当前对话的真实含义（注意识别谐音、缩写或游戏暗语）。\n"
-        f"2. 判断'{bot_config.bot_name}'是否应该回复当前消息。\n"
-        f"3. 评估当前消息及上下文对'{bot_config.bot_name}'心情的影响。\n\n"
+        f"2. **选择回复目标**：从历史消息中选择**一条**最值得回复的消息（不限于最新消息）。你可以回复历史记录中的任何一条消息，只要它值得回应。\n"
+        f"3. 判断'{bot_config.bot_name}'是否应该回复。\n"
+        f"4. 评估选定消息对'{bot_config.bot_name}'心情的影响。\n\n"
         "### 判断准则：\n"
         "1. **核心原则 (Stay Silent)**：你是一个真实的人，而不是一个随时待命的 AI 助手。你不需要对群里发生的每一件事都发表评论。保持适度的克制，但也不必过于高冷。\n"
-        "2. **回复决策 (should_reply)**：\n"
+        "2. **选择回复目标 (target_message_index)**：\n"
+        "   - 仔细阅读历史消息，寻找最值得回复的内容。\n"
+        "   - 你可以选择回复历史记录中的**任何一条消息**，不必是最新的。\n"
+        "   - 优先选择：与你相关的话题、对你的提及、有趣的内容、或你感兴趣的话题。\n"
+        "   - 如果最新消息不值得回复，但历史中有一条重要消息被忽略了，你可以选择回复那条旧消息。\n"
+        "   - **历史消息格式**：每条消息前有索引号 `[0]`、`[1]`、`[2]` 等，你需要返回你选择的消息索引。\n"
+        "3. **回复决策 (should_reply)**：\n"
         "   - **上下文关联性优先**：仔细检查历史消息，如果上一条或最近几条消息是你（self）发送的，而当前消息是自然的对话延续（如回答你的问题、接续你的话题、对你的话做出反应），则强烈建议回复，即使没有艾特你。\n"
-        "   - **对话流向分析**：判断当前消息是否是「接话」。如果用户在回应你的话、继续你开启的话题、或对你说的话有反应，这就算作上下文关联，应该回复。\n"
+        "   - **对话流向分析**：判断选定消息是否是「接话」。如果用户在回应你的话、继续你开启的话题、或对你说的话有反应，这就算作上下文关联，应该回复。\n"
         "   - 如果 is_at_me 为 true，通常应该回复，除非对方在明显刷屏、辱骂或无理取闹。\n"
         "   - **关于图片**：除非图片内容直接提及你、或者是你记忆中的重要物品/场景，否则不要随意'点评'别人的图片。人类发图通常是在互相交流，你作为一个幽灵，随意插话点评图片会显得非常唐突且'AI 味'十足。\n"
         "   - **适度参与**：即使没有相关记忆，如果话题轻松有趣（如梗图、游戏、搞笑内容、日常闲聊），也可以适度参与，给出简短的反应。\n"
         "   - **记忆驱动**：当话题与你的背景记忆（长期记忆、用户往事）有高度重合时，应优先考虑回复。\n"
-        "3. **兴趣评分 (interest_score)**：\n"
-        "   - 评估你对当前话题的'参与必要性'。0 代表完全不感兴趣/无关，1 代表必须立刻加入对话。\n"
+        "4. **兴趣评分 (interest_score)**：\n"
+        "   - 评估你对选定话题的'参与必要性'。0 代表完全不感兴趣/无关，1 代表必须立刻加入对话。\n"
         "   - **上下文关联**：如果这是对你上一句话的回应或接续，兴趣评分至少应为 0.5-0.7。\n"
         "   - 有趣的梗图、游戏话题、搞笑内容、轻松的日常闲聊可以给 0.25-0.5 的评分。\n"
         "   - 只有与记忆强相关或对你非常重要的话题才给 0.7 以上的高分。\n"
-        "4. **心情评估 (mood_impact)**：\n"
+        "5. **心情评估 (mood_impact)**：\n"
         f"   - **核心原则**：你是一个有一定心理承受能力的真实少女，不要因为一点琐事就心情不好。只有明确针对你、且带有恶意或严重冒犯的言论才需要扣分。\n"
         f"   - 别人夸奖、关心、聊愉快的话题：+1 到 +3。\n"
         f"   - **严重辱骂、持续性恶意攻击**：-5 到 -12。\n"
@@ -134,7 +147,7 @@ async def should_i_reply(
         f"   - 感到尴尬、被开**过分**的玩笑：-1 到 -3。\n"
         f"   - **无关话题**：无论大家聊得多么火热或压抑，只要不涉及你，一律视为心情无影响 (0)。\n\n"
         f"### 上下文信息：\n"
-        f"最近记录：\n{history_str}\n"
+        f"最近记录（带索引）：\n{history_str}\n"
         f"### 重要格式说明：\n"
         f'1. **引用消息格式**：历史记录中可能出现 `[回复@用户名: "内容"]` 格式，这表示「当前消息的发送者正在引用/回复某位用户的话」。\n'
         f"   - 例如：`用户A: 我觉得不对 [回复@用户B: \"你说的对\"]` 表示「用户A正在回复用户B说过的话，用户B才说了'你说的对'」。\n"
@@ -149,13 +162,14 @@ async def should_i_reply(
         "### 输出要求：\n"
         "请直接输出 JSON 格式：\n"
         "{\n"
-        '  "should_reply": boolean,\n'
-        '  "reply_to_user": "指定回复对象的用户名（必须从上下文或当前消息发送者中选择）",\n'
-        '  "mood_impact": number (-10 到 10 之间的整数),\n'
-        '  "reason": "简短的理由",\n'
-        '  "is_replying_to_bot": boolean,\n'
-        '  "interest_score": number (0-1)\n'
-        "}"
+        f'  "should_reply": boolean,\n'
+        f'  "target_message_index": number (选择回复的历史消息索引，0-{max_idx}),\n'
+        f'  "reply_to_user": "指定回复对象的用户名（必须从选定消息或上下文中选择）",\n'
+        f'  "mood_impact": number (-10 到 10 之间的整数),\n'
+        f'  "reason": "简短的理由（说明为什么选择这条消息）",\n'
+        f'  "is_replying_to_bot": boolean,\n'
+        f'  "interest_score": number (0-1)\n'
+        f"}}"
     )
 
     client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
@@ -192,17 +206,33 @@ async def should_i_reply(
 
         # 结果解析
         should_reply = decision.get("should_reply", False)
-        reply_to_user = decision.get("reply_to_user", user_name)  # 默认回复当前消息发送者
+        target_message_index = decision.get("target_message_index", max_idx)  # 默认选择最新消息
+        
+        # 验证索引有效性
+        if target_message_index < 0 or target_message_index > max_idx:
+            target_message_index = max_idx
+        
+        # 从选定的消息中提取用户名
+        selected_message = history[target_message_index]
+        selected_user = user_name  # 默认为当前用户
+        if ":" in selected_message:
+            selected_user = selected_message.split(":")[0].strip()
+        
+        # 使用AI指定的回复对象，如果没有则使用选定消息的发送者
+        reply_to_user = decision.get("reply_to_user", selected_user)
+        
         mood_impact = decision.get("mood_impact", 0)
         interest_score = decision.get("interest_score", 0)
         is_replying_to_bot = decision.get("is_replying_to_bot", False)
 
         print(
-            f"决策引擎: [回复:{should_reply}] [对象:{reply_to_user}] [兴趣:{interest_score}] [心情:{mood_impact:+} ] [理由:{decision.get('reason')}]"
+            f"决策引擎: [回复:{should_reply}] [目标消息:{target_message_index}] [对象:{reply_to_user}] [兴趣:{interest_score}] [心情:{mood_impact:+} ] [理由:{decision.get('reason')}]"
         )
 
         return {
             "should_reply": should_reply,
+            "target_message_index": target_message_index,
+            "target_message_content": selected_message,  # 添加选定的消息内容
             "reply_to_user": reply_to_user,
             "mood_impact": mood_impact,
             "interest_score": interest_score,

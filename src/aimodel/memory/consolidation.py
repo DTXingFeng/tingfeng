@@ -84,9 +84,7 @@ async def consolidate_memories(group_id: int):
             optimized_prompt = prompt + f"\n\n### 聊天记录：\n{chat_content}\n\n### 提取结果："
 
             response = await client.chat.completions.create(
-                model=creds["model"],
-                messages=[{"role": "user", "content": optimized_prompt}],
-                temperature=0.3
+                model=creds["model"], messages=[{"role": "user", "content": optimized_prompt}], temperature=0.3
             )
 
             output = response.choices[0].message.content.strip()
@@ -106,7 +104,7 @@ async def consolidate_memories(group_id: int):
                         # 尝试获取 user_id
                         u_id = await db_manager.get_user_id_by_name(group_id, u_name)
                         if u_id:
-                            await db_manager.update_user_impression(group_id, u_id, u_name, u_profile)
+                            await db_manager.update_user_impression(group_id, u_name, u_profile)
                 elif line.startswith("STORY|"):
                     parts = line.split("|")
                     if len(parts) >= 3:
