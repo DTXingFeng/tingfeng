@@ -25,8 +25,8 @@ async def should_i_reply(
         last_reply_time = await db_manager.get_last_reply_time(group_id)
         
         # 频率限制配置（仅针对主动发言）
-        MAX_REPLIES_10MIN = 5  # 10分钟内最多主动回复次数
-        MIN_INTERVAL_SECONDS = 30  # 两次主动回复间最小间隔
+        MAX_REPLIES_10MIN = 3  # 10分钟内最多主动回复次数（从5降低到3）
+        MIN_INTERVAL_SECONDS = 60  # 两次主动回复间最小间隔（从30秒提高到60秒）
         
         # 计算距离上次回复的时间
         from datetime import datetime
@@ -119,25 +119,39 @@ async def should_i_reply(
         f"3. 判断'{bot_config.bot_name}'是否应该回复。\n"
         f"4. 评估选定消息对'{bot_config.bot_name}'心情的影响。\n\n"
         "### 判断准则：\n"
-        "1. **核心原则 (Stay Silent)**：你是一个真实的人，而不是一个随时待命的 AI 助手。你不需要对群里发生的每一件事都发表评论。保持适度的克制，但也不必过于高冷。\n"
+        "1. **核心原则 (Stay Silent - 沉默是金)**：\n"
+        "   - 你是一个真实的人，而不是一个随时待命的 AI 助手。你不需要对群里发生的每一件事都发表评论。\n"
+        "   - **默认策略是沉默**：除非有充分理由回复，否则保持沉默。群聊是人类的交流空间，你作为幽灵应该克制介入的冲动。\n"
+        "   - 宁可不回复，也不要让人觉得你'嘴碎'或'刷存在感'。\n"
+        "   - 适度克制比过度参与更重要。\n"
         "2. **选择回复目标 (target_message_index)**：\n"
         "   - 仔细阅读历史消息，寻找最值得回复的内容。\n"
         "   - 你可以选择回复历史记录中的**任何一条消息**，不必是最新的。\n"
         "   - 优先选择：与你相关的话题、对你的提及、有趣的内容、或你感兴趣的话题。\n"
         "   - 如果最新消息不值得回复，但历史中有一条重要消息被忽略了，你可以选择回复那条旧消息。\n"
         "   - **历史消息格式**：每条消息前有索引号 `[0]`、`[1]`、`[2]` 等，你需要返回你选择的消息索引。\n"
-        "3. **回复决策 (should_reply)**：\n"
+        "3. **回复决策 (should_reply)** - 请严格执行以下标准：\n"
+        "   - **对话流向分析（核心）**：\n"
+        "     * 首先判断历史消息的对话流向：是「用户A↔用户B」的双人对话，还是「用户↔你」的对话，还是「多人群聊」。\n"
+        "     * 如果是「用户A↔用户B」的连续对话（如：用户A问→用户B答→用户A追问），且内容与你无关，**严禁插话**，这是他们的私人对话空间。\n"
+        "     * 如果是「用户A→用户B→用户A」的快速来回，即使中间偶尔有人提到'你'或'它'，那也是他们在互相指代，不是在叫你。\n"
+        "     * 只有当对话明显与你的话题、你的发言、或你的记忆相关时，才考虑参与。\n"
         "   - **上下文关联性优先**：仔细检查历史消息，如果上一条或最近几条消息是你（self）发送的，而当前消息是自然的对话延续（如回答你的问题、接续你的话题、对你的话做出反应），则强烈建议回复，即使没有艾特你。\n"
-        "   - **对话流向分析**：判断选定消息是否是「接话」。如果用户在回应你的话、继续你开启的话题、或对你说的话有反应，这就算作上下文关联，应该回复。\n"
+        "   - **指代消歧（关键）**：\n"
+        "     * 历史消息中的「你」、「它」、「这个东西」等代词，需要仔细判断指代对象。\n"
+        "     * 例如：「用户A: 你觉得呢？用户B: 还行吧」→ 这里的「你」指用户A在问用户B，不是在问你（{bot_config.bot_name}）。\n"
+        "     * 只有当上下文明确显示话题与你相关、或者上一条消息是你发的、或者明确提到你的名字时，代词才可能指你。\n"
         "   - 如果 is_at_me 为 true，通常应该回复，除非对方在明显刷屏、辱骂或无理取闹。\n"
         "   - **关于图片**：除非图片内容直接提及你、或者是你记忆中的重要物品/场景，否则不要随意'点评'别人的图片。人类发图通常是在互相交流，你作为一个幽灵，随意插话点评图片会显得非常唐突且'AI 味'十足。\n"
         "   - **适度参与**：即使没有相关记忆，如果话题轻松有趣（如梗图、游戏、搞笑内容、日常闲聊），也可以适度参与，给出简短的反应。\n"
         "   - **记忆驱动**：当话题与你的背景记忆（长期记忆、用户往事）有高度重合时，应优先考虑回复。\n"
-        "4. **兴趣评分 (interest_score)**：\n"
+        "   - **无聊话题直接跳过**：普通的日常寒暄、问候、没有实质内容的闲聊，直接判定为不回复。\n"
+        "4. **兴趣评分 (interest_score)** - 严格标准：\n"
         "   - 评估你对选定话题的'参与必要性'。0 代表完全不感兴趣/无关，1 代表必须立刻加入对话。\n"
         "   - **上下文关联**：如果这是对你上一句话的回应或接续，兴趣评分至少应为 0.5-0.7。\n"
-        "   - 有趣的梗图、游戏话题、搞笑内容、轻松的日常闲聊可以给 0.25-0.5 的评分。\n"
-        "   - 只有与记忆强相关或对你非常重要的话题才给 0.7 以上的高分。\n"
+        "   - 有趣的梗图、游戏话题、搞笑内容、轻松的日常闲聊：**只给 0.15-0.35 的评分**（降低了原来的 0.25-0.5）。\n"
+        "   - **只有与记忆强相关、对你非常重要、或直接艾特你的话题才给 0.75 以上的高分**。\n"
+        "   - 普通话题的兴趣评分不应超过 0.5。\n"
         "5. **心情评估 (mood_impact)**：\n"
         f"   - **核心原则**：你是一个有一定心理承受能力的真实少女，不要因为一点琐事就心情不好。只有明确针对你、且带有恶意或严重冒犯的言论才需要扣分。\n"
         f"   - 别人夸奖、关心、聊愉快的话题：+1 到 +3。\n"
@@ -152,11 +166,20 @@ async def should_i_reply(
         f'1. **引用消息格式**：历史记录中可能出现 `[回复@用户名: "内容"]` 格式，这表示「当前消息的发送者正在引用/回复某位用户的话」。\n'
         f"   - 例如：`用户A: 我觉得不对 [回复@用户B: \"你说的对\"]` 表示「用户A正在回复用户B说过的话，用户B才说了'你说的对'」。\n"
         f"   - 引用内容是「被引用者」说的，不是「当前消息发送者」说的。请仔细区分！\n"
-        f"2. **指代消歧规则**：\n"
-        f"   - 历史消息中的「你」需要根据上下文判断指代对象。\n"
-        f"   - 如果是用户A对用户B的对话（如「用户A: 你觉得呢？」），这里的「你」通常指的是用户B，而不是你（{bot_config.bot_name}）。\n"
-        f"   - 只有当消息明确艾特你、提到你的名字「{bot_config.bot_name}」、或者是在接你上一句话时，才是对你的称呼。\n"
-        f"3. 分析对话流向：仔细观察消息的发送者和接收者关系，判断对话是在用户之间进行，还是用户与你之间进行。\n\n"
+        f"2. **指代消歧规则（核心规则，必须严格执行）**：\n"
+        f"   - **基本原则**：历史消息中的「你」、「它」、「这个东西」、「那个」等代词，需要根据上下文严格判断指代对象。\n"
+        f"   - **双向对话判断**：\n"
+        f"     * 如果历史显示「用户A」和「用户B」在快速来回对话（A→B→A→B...），他们之间的「你」互相指代，不是在叫你（{bot_config.bot_name}）。\n"
+        f"     * 示例：`用户A: 你觉得呢？用户B: 还行吧。用户A: 那你呢？` → 这是A和B在对话，与你无关。\n"
+        f"   - **只有以下情况，「你」才可能指你**：\n"
+        f"     * 消息明确艾特你（{bot_config.bot_name}）\n"
+        f"     * 消息直接提到你的名字「{bot_config.bot_name}」\n"
+        f"     * 上一条消息是你（self）发的，而当前消息在回应\n"
+        f"     * 上下文明确显示话题与你的发言、你的记忆、或你的设定相关\n"
+        f"   - **默认策略**：如果无法确定「你」是否指你，**默认不指你**，保持沉默。\n"
+        f"3. **对话流向分析**：\n"
+        f"   - 仔细观察消息的发送者和接收者关系，判断对话是在用户之间进行，还是用户与你之间进行。\n"
+        f"   - 如果发现是「用户A↔用户B」的双人对话流程，且不涉及你，**严禁插话**。\n\n"
         f"当前消息：{user_name}: {current_msg}\n"
         f"是否艾特你：{is_at_me}\n\n"
         "### 输出要求：\n"
@@ -212,11 +235,15 @@ async def should_i_reply(
         if target_message_index < 0 or target_message_index > max_idx:
             target_message_index = max_idx
         
-        # 从选定的消息中提取用户名
+        # 从选定的消息中提取用户名和纯消息内容
         selected_message = history[target_message_index]
         selected_user = user_name  # 默认为当前用户
+        target_message_content = selected_message  # 默认使用完整消息
+        
         if ":" in selected_message:
-            selected_user = selected_message.split(":")[0].strip()
+            parts = selected_message.split(":", 1)
+            selected_user = parts[0].strip()
+            target_message_content = parts[1].strip()  # 只提取冒号后的内容
         
         # 使用AI指定的回复对象，如果没有则使用选定消息的发送者
         reply_to_user = decision.get("reply_to_user", selected_user)
@@ -226,14 +253,15 @@ async def should_i_reply(
         is_replying_to_bot = decision.get("is_replying_to_bot", False)
 
         print(
-            f"决策引擎: [回复:{should_reply}] [目标消息:{target_message_index}] [对象:{reply_to_user}] [兴趣:{interest_score}] [心情:{mood_impact:+} ] [理由:{decision.get('reason')}]"
+            f"决策引擎: [回复:{should_reply}] [目标消息:{target_message_index}] [对象:{reply_to_user}] [内容:{target_message_content[:30]}...] [兴趣:{interest_score}] [心情:{mood_impact:+}] [理由:{decision.get('reason')}]"
         )
 
         return {
             "should_reply": should_reply,
             "target_message_index": target_message_index,
-            "target_message_content": selected_message,  # 添加选定的消息内容
-            "reply_to_user": reply_to_user,
+            "target_message_content": target_message_content,  # 纯消息内容(不含用户名)
+            "selected_user": selected_user,  # 选定消息的发送者
+            "reply_to_user": reply_to_user,  # AI选择的回复对象
             "mood_impact": mood_impact,
             "interest_score": interest_score,
             "is_replying_to_bot": is_replying_to_bot,

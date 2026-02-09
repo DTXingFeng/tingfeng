@@ -277,14 +277,15 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     group_id, ctx["display_name"], is_at_bot=False, interest_score=interest_score
                                 )
                                 # 执行回复逻辑
-                                target_user = decision.get("reply_to_user", ctx["display_name"])
+                                selected_user = decision.get("selected_user", ctx["display_name"])  # 选定消息的发送者
+                                target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
                                 target_msg = decision.get("target_message_content", ctx["llm_text"])
                                 await process_my_logic(
                                     bot=bot,
                                     event=ctx["event"],
                                     message_id=ctx["message_id"],
                                     text=ctx["text"],
-                                    llm_text=target_msg,  # 使用 AI 选择的消息内容
+                                    llm_text=target_msg,  # 使用 AI 选择的消息内容(纯文本,不含用户名)
                                     normal_images=ctx["normal_images"],
                                     stickers=ctx["stickers"],
                                     flash_images=ctx["flash_images"],
@@ -292,7 +293,7 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     group_id=group_id,
                                     user_id=ctx["user_id"],
                                     nickname=ctx["nickname"],
-                                    card=target_user,
+                                    card=selected_user,  # 使用选定消息的发送者作为回复对象
                                     role=ctx["role"],
                                     raw_msg=ctx["raw_msg"],
                                     reply_message_id=ctx.get("reply_message_id"),  # 传递引用消息 ID
@@ -552,8 +553,9 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                     else:
                         do_reply = False
 
-                    target_user = decision.get("reply_to_user", display_name)
-                    target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容
+                    selected_user = decision.get("selected_user", display_name)  # 选定消息的发送者
+                    target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
+                    target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容(纯文本)
                 finally:
                     deciding_groups.remove(group_id)
         else:
