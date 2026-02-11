@@ -8,6 +8,7 @@ from src.mcp.tools.user import UserProfileTool, GetCreatorInfoTool, UpdateRelati
 from src.mcp.tools.knowledge import KnowledgeQueryTool, GetCreatorKnowledgeTool, AddKnowledgeTool
 from src.mcp.tools.utility import GetCurrentTimeTool, IsWithinScheduleTool, FormatTextTool, CountWordsTool
 from src.mcp.tools.message import GetRecentMessagesTool, GetMessageContextTool
+from src.mcp.tools.system import GetSystemResourceTool, GetNetworkInfoTool, GetBootTimeTool, GetRaspberryPiInfoTool
 from src.mcp.registry import tool_registry
 from src.utils.logger import get_logger
 
@@ -48,6 +49,12 @@ def load_all_tools():
     tool_registry.register(GetRecentMessagesTool())
     tool_registry.register(GetMessageContextTool())
 
+    # 系统监控工具
+    tool_registry.register(GetSystemResourceTool())
+    tool_registry.register(GetNetworkInfoTool())
+    tool_registry.register(GetBootTimeTool())
+    tool_registry.register(GetRaspberryPiInfoTool())
+
     logger.info(f"MCP 工具加载完成！共注册 {len(tool_registry.list_tools())} 个工具")
 
     # 输出已注册的工具列表
@@ -64,7 +71,7 @@ def get_tools_summary() -> dict:
     """
     tools = tool_registry.list_tools()
 
-    summary = {"total": len(tools), "memory": [], "user": [], "knowledge": [], "utility": [], "message": []}
+    summary = {"total": len(tools), "memory": [], "user": [], "knowledge": [], "utility": [], "message": [], "system": []}
 
     for tool_name in tools:
         tool = tool_registry.get_tool(tool_name)
@@ -76,6 +83,8 @@ def get_tools_summary() -> dict:
             summary["knowledge"].append(tool_name)
         elif tool_name.startswith("get_") and "message" in tool_name or tool_name.startswith("message"):
             summary["message"].append(tool_name)
+        elif tool_name.startswith("get_") and ("system" in tool_name or "network" in tool_name or "boot" in tool_name or "raspberry" in tool_name):
+            summary["system"].append(tool_name)
         else:
             summary["utility"].append(tool_name)
 
@@ -104,6 +113,9 @@ if __name__ == "__main__":
             print(f"  - {t}")
         print(f"\n消息工具 ({len(summary['message'])}):")
         for t in summary["message"]:
+            print(f"  - {t}")
+        print(f"\n系统监控工具 ({len(summary['system'])}):")
+        for t in summary["system"]:
             print(f"  - {t}")
 
         print("\n测试工具调用...")

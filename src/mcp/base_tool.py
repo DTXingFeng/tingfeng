@@ -61,7 +61,15 @@ class BaseTool(ABC):
             dict: 标准化的执行结果
         """
         try:
-            result = await self.execute(**kwargs)
+            # 过滤掉不在工具参数定义中的额外参数
+            filtered_kwargs = {}
+            for key, value in kwargs.items():
+                if key in self.parameters:
+                    filtered_kwargs[key] = value
+                else:
+                    logger.debug(f"工具 {self.name} 忽略未定义的参数: {key}={value}")
+            
+            result = await self.execute(**filtered_kwargs)
             return {"success": True, "data": result, "tool": self.name, "error": None}
         except Exception as e:
             logger.error(f"工具 {self.name} 执行失败: {e}", exc_info=True)
