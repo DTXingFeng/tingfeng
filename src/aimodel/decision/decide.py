@@ -23,26 +23,27 @@ async def should_i_reply(
     if not is_at_me:
         recent_replies = await db_manager.get_recent_reply_count(group_id, minutes=10)
         last_reply_time = await db_manager.get_last_reply_time(group_id)
-        
+
         # 频率限制配置（仅针对主动发言）
         MAX_REPLIES_10MIN = 3  # 10分钟内最多主动回复次数（从5降低到3）
         MIN_INTERVAL_SECONDS = 60  # 两次主动回复间最小间隔（从30秒提高到60秒）
-        
+
         # 计算距离上次回复的时间
         from datetime import datetime
+
         time_since_last_reply = None
         if last_reply_time:
             time_since_last_reply = (datetime.now() - last_reply_time).total_seconds()
-        
+
         # 频率检查：只对主动发言进行限制
         if recent_replies >= MAX_REPLIES_10MIN:
             logger.info(f"频率限制: 10分钟内已主动回复{recent_replies}次，跳过非艾特消息")
             return {"should_reply": False, "mood_impact": 0}
-        
+
         if time_since_last_reply and time_since_last_reply < MIN_INTERVAL_SECONDS:
             logger.info(f"频率限制: 距离上次回复仅{time_since_last_reply:.0f}秒，跳过非艾特消息")
             return {"should_reply": False, "mood_impact": 0}
-    
+
     # 1. 获取配置
     model_alias = ai_config.decision_model
     if not model_alias:
@@ -62,7 +63,7 @@ async def should_i_reply(
 
     # 2. 准备上下文 (获取最近 15 条消息，提供更多选择空间)
     history = await db_manager.get_chat_log(group_id, limit=15)
-    
+
     # 构建带索引的历史消息，方便 AI 选择
     history_with_index = []
     for idx, msg in enumerate(history):
@@ -88,6 +89,16 @@ async def should_i_reply(
     except Exception as e:
         logger.warning(f"获取长期记忆失败: {e}")
 
+    # 获取禁言反思记录
+    mute_reflections = []
+    try:
+        mute_reflection_records = await db_manager.get_mute_reflections(group_id, limit=3)
+        if mute_reflection_records:
+            for i, reflection in enumerate(mute_reflection_records, 1):
+                mute_reflections.append(f"{i}. 原因: {reflection['ban_reason']} | 教训: {reflection['lesson'][:50]}...")
+    except Exception as e:
+        logger.warning(f"获取禁言反思失败: {e}")
+
     # 构造记忆上下文
     memory_context = []
     if user_profile:
@@ -98,6 +109,9 @@ async def should_i_reply(
     if long_term_memories:
         lt_mem_str = "\n  ".join([f"* {m}" for m in long_term_memories])
         memory_context.append(f"- 相关的长期记忆：\n  {lt_mem_str}")
+    if mute_reflections:
+        mute_ref_str = "\n  ".join([f"* {m}" for m in mute_reflections])
+        memory_context.append(f"- 之前的禁言反思（避免重蹈覆辙）：\n  {mute_ref_str}")
 
     memory_str = "\n".join(memory_context) if memory_context else "暂无相关背景记忆。"
 
@@ -218,7 +232,7 @@ async def should_i_reply(
         async for chunk in stream:
             if chunk.choices and chunk.choices[0].delta.content:
                 content += chunk.choices[0].delta.content
-        
+
         content = content.strip()
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
@@ -230,24 +244,24 @@ async def should_i_reply(
         # 结果解析
         should_reply = decision.get("should_reply", False)
         target_message_index = decision.get("target_message_index", max_idx)  # 默认选择最新消息
-        
+
         # 验证索引有效性
         if target_message_index < 0 or target_message_index > max_idx:
             target_message_index = max_idx
-        
+
         # 从选定的消息中提取用户名和纯消息内容
         selected_message = history[target_message_index]
         selected_user = user_name  # 默认为当前用户
         target_message_content = selected_message  # 默认使用完整消息
-        
+
         if ":" in selected_message:
             parts = selected_message.split(":", 1)
             selected_user = parts[0].strip()
             target_message_content = parts[1].strip()  # 只提取冒号后的内容
-        
+
         # 使用AI指定的回复对象，如果没有则使用选定消息的发送者
         reply_to_user = decision.get("reply_to_user", selected_user)
-        
+
         mood_impact = decision.get("mood_impact", 0)
         interest_score = decision.get("interest_score", 0)
         is_replying_to_bot = decision.get("is_replying_to_bot", False)

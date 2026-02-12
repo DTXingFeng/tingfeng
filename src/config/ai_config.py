@@ -33,6 +33,7 @@ class AIConfig(BaseModel):
     style_mimic_model: str = ""  # 风格模仿模型
     slang_mining_model: str = ""  # 黑话挖掘模型
     personality_refine_model: str = ""  # 人格精炼模型
+    mute_reflection_model: str = ""  # 禁言反思模型
 
     # 记忆相关功能绑定
     dream_agent_model: str = ""  # 梦境代理模型

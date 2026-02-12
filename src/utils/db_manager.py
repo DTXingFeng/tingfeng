@@ -197,6 +197,22 @@ class DBManager:
                 )
 
                 await cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS mute_reflections (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        group_id INTEGER,
+                        ban_reason TEXT,
+                        trigger_context TEXT,
+                        reflection_thought TEXT,
+                        lesson_learned TEXT,
+                        operator_id INTEGER,
+                        duration_seconds INTEGER,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """
+                )
+
+                await cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_chat_history_group_time ON chat_history(group_id, timestamp)"
                 )
                 await cursor.execute(
@@ -226,6 +242,9 @@ class DBManager:
                 )
                 await cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_bot_reply_history_active ON bot_reply_history(group_id, is_at_bot, timestamp DESC)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_mute_reflections_group_time ON mute_reflections(group_id, timestamp DESC)"
                 )
 
                 await conn.commit()
@@ -916,6 +935,56 @@ class DBManager:
         async with await self._get_connection() as conn:
             await conn.execute("VACUUM")
             await conn.commit()
+
+    async def save_mute_reflection(
+        self,
+        group_id: int,
+        ban_reason: str,
+        trigger_context: str,
+        reflection_thought: str,
+        lesson_learned: str,
+        operator_id: int,
+        duration_seconds: int,
+    ):
+        """保存禁言反思记录"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                INSERT INTO mute_reflections 
+                (group_id, ban_reason, trigger_context, reflection_thought, lesson_learned, operator_id, duration_seconds)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (group_id, ban_reason, trigger_context, reflection_thought, lesson_learned, operator_id, duration_seconds),
+            )
+            await conn.commit()
+
+    async def get_mute_reflections(self, group_id: int, limit: int = 10) -> List[Dict]:
+        """获取禁言反思记录"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT ban_reason, reflection_thought, lesson_learned, operator_id, duration_seconds, timestamp
+                FROM mute_reflections
+                WHERE group_id = ?
+                ORDER BY timestamp DESC
+                LIMIT ?
+                """,
+                (group_id, limit),
+            )
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "ban_reason": row[0],
+                    "reflection_thought": row[1],
+                    "lesson_learned": row[2],
+                    "operator_id": row[3],
+                    "duration_seconds": row[4],
+                    "timestamp": row[5],
+                }
+                for row in rows
+            ]
 
 
 db_manager = DBManager()
