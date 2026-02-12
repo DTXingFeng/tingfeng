@@ -95,7 +95,9 @@ async def should_i_reply(
         mute_reflection_records = await db_manager.get_mute_reflections(group_id, limit=3)
         if mute_reflection_records:
             for i, reflection in enumerate(mute_reflection_records, 1):
-                mute_reflections.append(f"{i}. 原因: {reflection['ban_reason']} | 教训: {reflection['lesson'][:50]}...")
+                mute_reflections.append(
+                    f"{i}. 原因: {reflection['ban_reason']} | 教训: {reflection['lesson_learned'][:50]}..."
+                )
     except Exception as e:
         logger.warning(f"获取禁言反思失败: {e}")
 

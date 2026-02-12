@@ -202,7 +202,9 @@ async def gather_reflection_context(
         if past_mutes:
             past_reflections_list = []
             for i, mute in enumerate(past_mutes, 1):
-                past_reflections_list.append(f"{i}. 原因: {mute['ban_reason']} | 教训: {mute['lesson'][:30]}...")
+                past_reflections_list.append(
+                    f"{i}. 原因: {mute['ban_reason']} | 教训: {mute['lesson_learned'][:30]}..."
+                )
             context["past_reflections"] = "\n".join(past_reflections_list)
 
     except Exception as e:
