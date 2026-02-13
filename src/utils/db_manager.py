@@ -709,6 +709,127 @@ class DBManager:
             rows = await cursor.fetchall()
             return [{"subject": row[0], "predicate": row[1], "object": row[2], "confidence": row[3]} for row in rows]
 
+    async def delete_knowledge_triplet(
+        self, group_id: int, subject: str = None, predicate: str = None, obj: str = None
+    ) -> int:
+        """
+        删除知识三元组
+
+        Args:
+            group_id: 群组 ID
+            subject: 主体（可选，不指定则删除该群所有）
+            predicate: 谓词（可选）
+            obj: 客体（可选）
+
+        Returns:
+            删除的记录数
+        """
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+
+            conditions = ["group_id = ?"]
+            params = [group_id]
+
+            if subject:
+                conditions.append("subject = ?")
+                params.append(subject)
+            if predicate:
+                conditions.append("predicate = ?")
+                params.append(predicate)
+            if obj:
+                conditions.append("object = ?")
+                params.append(obj)
+
+            query = f"DELETE FROM knowledge_triplets WHERE {' AND '.join(conditions)}"
+            await cursor.execute(query, tuple(params))
+            deleted_count = cursor.rowcount
+            await conn.commit()
+
+            return deleted_count
+
+    async def delete_style_pattern(self, group_id: int, context: str = None, style_desc: str = None) -> int:
+        """
+        删除风格模式
+
+        Args:
+            group_id: 群组 ID
+            context: 情境（可选）
+            style_desc: 风格描述（可选）
+
+        Returns:
+            删除的记录数
+        """
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+
+            conditions = ["group_id = ?"]
+            params = [group_id]
+
+            if context:
+                conditions.append("context = ?")
+                params.append(context)
+            if style_desc:
+                conditions.append("style_desc = ?")
+                params.append(style_desc)
+
+            query = f"DELETE FROM style_patterns WHERE {' AND '.join(conditions)}"
+            await cursor.execute(query, tuple(params))
+            deleted_count = cursor.rowcount
+            await conn.commit()
+
+            return deleted_count
+
+    async def merge_style_patterns(
+        self, group_id: int, old_patterns: List[Dict], new_context: str, new_style_desc: str
+    ) -> bool:
+        """
+        合并多个风格模式为一个
+
+        Args:
+            group_id: 群组 ID
+            old_patterns: 要合并的旧模式列表 [{"context": "...", "style_desc": "..."}]
+            new_context: 新的情境描述
+            new_style_desc: 新的风格描述
+
+        Returns:
+            是否成功
+        """
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+
+            try:
+                total_weight = 0
+                for pattern in old_patterns:
+                    await cursor.execute(
+                        "SELECT weight FROM style_patterns WHERE group_id = ? AND context = ? AND style_desc = ?",
+                        (group_id, pattern["context"], pattern["style_desc"]),
+                    )
+                    row = await cursor.fetchone()
+                    if row:
+                        total_weight += row[0]
+
+                    await cursor.execute(
+                        "DELETE FROM style_patterns WHERE group_id = ? AND context = ? AND style_desc = ?",
+                        (group_id, pattern["context"], pattern["style_desc"]),
+                    )
+
+                await cursor.execute(
+                    """
+                    INSERT INTO style_patterns (group_id, context, style_desc, weight, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(group_id, context, style_desc) DO UPDATE SET
+                    weight = weight + ?,
+                    updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (group_id, new_context, new_style_desc, total_weight, total_weight),
+                )
+
+                await conn.commit()
+                return True
+            except Exception:
+                await conn.rollback()
+                return False
+
     async def get_all_names_for_user(self, group_id: int, user_name: str) -> List[str]:
         """获取用户在所有群组中的名字（通过 QQ 号关联）"""
         async with await self._get_connection() as conn:

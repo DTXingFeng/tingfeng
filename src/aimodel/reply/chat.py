@@ -180,7 +180,8 @@ async def get_chat_reply(
         "4. **极致碎片化**：严禁输出长句。严禁使用句号。\n"
         "5. **简短克制**：你已经通过决策引擎判断过应该回复，所以回复时请保持精炼。一句话能说完的，绝对不用两句。宁可回得太少，也不要回得太多。\n"
         "6. **亲民接地气**：不要用技术术语炫耀，不要用贬低性词汇。你是群里的一员，说话要像个普通群友，轻松自然。\n"
-        "7. **表情包使用**：你应该在适当的时候使用表情包来表达情绪，在回复末尾加上 '[表情:标签名]'。可选标签：开心、暴躁、委屈、得意、傲娇、摸摸头、疑惑、震惊、大哭。示例：'乐[表情:开心]' 或 '[表情:疑惑]'（只发表情包也可以）。\n"
+        "7. **禁止解释笑点**：绝对不要解释为什么好笑！大家都能看懂的东西，不要说「这不就是xx吗」、「笑点解析」之类的话。直接反应就行，比如「笑死」、「乐」、「绷不住了」。宁可只回一个表情，也不要解释笑点。\n"
+        "8. **表情包使用**：你应该在适当的时候使用表情包来表达情绪，在回复末尾加上 '[表情:标签名]'。可选标签：开心、暴躁、委屈、得意、傲娇、摸摸头、疑惑、震惊、大哭。示例：'乐[表情:开心]' 或 '[表情:疑惑]'（只发表情包也可以）。\n"
     )
 
     # 注入关系状态引导
@@ -194,9 +195,7 @@ async def get_chat_reply(
     elif rel_status == "朋友":
         rel_instruction = "你对此人有一定好感，可以轻松随意地聊，偶尔开开玩笑。"
     elif rel_status == "死党":
-        rel_instruction = (
-            "此人是你在群里为数不多的熟人，你可以更放松更随意一些，不用太拘束。"
-        )
+        rel_instruction = "此人是你在群里为数不多的熟人，你可以更放松更随意一些，不用太拘束。"
 
     system_prompt += f"\n### 你与 {user_name} 的当前关系：\n- **状态**：{rel_status} (好感度: {rel_fav}/100)\n- **行为准则**：{rel_instruction}\n"
 
@@ -312,7 +311,7 @@ async def get_chat_reply(
     try:
         # 获取 MCP 工具定义
         mcp_tools = tool_registry.get_all_definitions()
-        
+
         # 构建请求参数
         stream_params = {
             "model": creds["model"],
@@ -321,22 +320,22 @@ async def get_chat_reply(
             "temperature": 0.7,
             "stream": True,
         }
-        
+
         if mcp_tools:
             stream_params["tools"] = mcp_tools
             stream_params["tool_choice"] = "auto"
-        
+
         # 第一次流式调用：检查是否需要工具调用
         stream = await client.chat.completions.create(**stream_params)
-        
+
         reply_content = ""
         tool_calls_dict = {}
-        
+
         async for chunk in stream:
             # 收集文本内容
             if chunk.choices and chunk.choices[0].delta.content:
                 reply_content += chunk.choices[0].delta.content
-            
+
             # 收集 tool_calls（可能分多个 chunk 返回，需要根据 index 累积）
             if chunk.choices and chunk.choices[0].delta.tool_calls:
                 for tool_call_chunk in chunk.choices[0].delta.tool_calls:
@@ -345,49 +344,51 @@ async def get_chat_reply(
                         tool_calls_dict[idx] = {
                             "id": tool_call_chunk.id,
                             "name": tool_call_chunk.function.name if tool_call_chunk.function.name else "",
-                            "arguments": tool_call_chunk.function.arguments if tool_call_chunk.function.arguments else "",
+                            "arguments": (
+                                tool_call_chunk.function.arguments if tool_call_chunk.function.arguments else ""
+                            ),
                         }
                     else:
                         if tool_call_chunk.function.name:
                             tool_calls_dict[idx]["name"] = tool_call_chunk.function.name
                         if tool_call_chunk.function.arguments:
                             tool_calls_dict[idx]["arguments"] += tool_call_chunk.function.arguments
-        
+
         # 如果有工具调用，执行并再次流式生成
         if tool_calls_dict:
             logger.info(f"检测到 {len(tool_calls_dict)} 个工具调用")
-            
+
             for idx, tool_call_data in tool_calls_dict.items():
                 tool_name = tool_call_data["name"]
                 tool_args = tool_call_data["arguments"]
-                
+
                 if not tool_name or not tool_args:
                     continue
-                
+
                 logger.info(f"LLM 调用工具: {tool_name}, 参数: {tool_args}")
-                
+
                 import json
-                
+
                 try:
                     if isinstance(tool_args, str):
                         tool_args = json.loads(tool_args)
                 except json.JSONDecodeError:
                     logger.error(f"工具参数解析失败: {tool_args}")
                     tool_args = {}
-                
+
                 # 执行工具
                 tool_result = await tool_registry.execute(tool_name, **tool_args)
-                
+
                 if tool_result.get("success"):
                     result_data = tool_result.get("data", {})
                     logger.info(f"工具 {tool_name} 执行成功: {result_data}")
-                    
+
                     # 将工具结果返回给 LLM
                     tool_result_message = {
                         "role": "system",
                         "content": f"### 工具执行结果（{tool_name}）：\n{json.dumps(result_data, ensure_ascii=False)}",
                     }
-                    
+
                     # 再次使用流式传输生成最终回复
                     stream = await client.chat.completions.create(
                         model=creds["model"],
@@ -396,7 +397,7 @@ async def get_chat_reply(
                         temperature=0.7,
                         stream=True,
                     )
-                    
+
                     reply_content = ""
                     async for chunk in stream:
                         if chunk.choices and chunk.choices[0].delta.content:

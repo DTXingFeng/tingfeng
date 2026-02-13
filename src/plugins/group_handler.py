@@ -226,7 +226,7 @@ async def process_my_logic(
             error_type = type(e).__name__
         except:
             error_type = "Exception"
-        logger.error(f"处理消息时发生异常 [{error_type}]: {error_msg}", exc_info=True)
+        logger.error(f"处理消息时发生异常 [{error_type}]", extra={"error_msg": error_msg}, exc_info=True)
     finally:
         # 回复处理完成，移除生成状态并更新冷却时间
         generating_reply_groups.discard(group_id)
