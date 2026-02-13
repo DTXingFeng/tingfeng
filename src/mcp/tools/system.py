@@ -19,7 +19,7 @@ class GetSystemResourceTool(BaseTool):
         "include_processes": {
             "type": "boolean",
             "description": "是否包含进程信息（进程数、僵尸进程等）",
-            "required": False
+            "required": False,
         }
     }
 
@@ -41,7 +41,7 @@ class GetSystemResourceTool(BaseTool):
                 "cpu_percent": None,
                 "memory": None,
                 "disk": None,
-                "processes": None
+                "processes": None,
             }
 
         result = {
@@ -209,11 +209,7 @@ class GetNetworkInfoTool(BaseTool):
         try:
             import psutil
         except ImportError:
-            return {
-                "error": "psutil 库未安装，请运行: pip install psutil",
-                "connections": None,
-                "io_counters": None
-            }
+            return {"error": "psutil 库未安装，请运行: pip install psutil", "connections": None, "io_counters": None}
 
         connections = psutil.net_connections(kind="inet")
         conn_info = {
@@ -429,11 +425,7 @@ class GetBootTimeTool(BaseTool):
             import psutil
             import datetime
         except ImportError:
-            return {
-                "error": "psutil 库未安装，请运行: pip install psutil",
-                "boot_time": None,
-                "uptime": None
-            }
+            return {"error": "psutil 库未安装，请运行: pip install psutil", "boot_time": None, "uptime": None}
 
         boot_time = psutil.boot_time()
         boot_datetime = datetime.datetime.fromtimestamp(boot_time)

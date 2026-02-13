@@ -8,6 +8,7 @@ root_path = Path(__file__).parent.parent.absolute()
 if str(root_path) not in sys.path:
     sys.path.insert(0, str(root_path))
 
+
 def test_imports():
     print("=== TingFengBot Import Diagnostic ===")
     print(f"Python version: {sys.version}")
@@ -23,7 +24,7 @@ def test_imports():
         "src.config.config",
         "src.utils.db_manager",
         "src.utils.logger",
-        "src.plugins.group_handler"
+        "src.plugins.group_handler",
     ]
 
     for module_name in modules_to_test:
@@ -62,6 +63,7 @@ def test_imports():
                 print("✅ Writable")
             else:
                 print("❌ Not Writable")
+
 
 if __name__ == "__main__":
     test_imports()

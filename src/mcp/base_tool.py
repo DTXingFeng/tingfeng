@@ -68,7 +68,7 @@ class BaseTool(ABC):
                     filtered_kwargs[key] = value
                 else:
                     logger.debug(f"工具 {self.name} 忽略未定义的参数: {key}={value}")
-            
+
             result = await self.execute(**filtered_kwargs)
             return {"success": True, "data": result, "tool": self.name, "error": None}
         except Exception as e:

@@ -7,10 +7,11 @@ sys.path.append(os.path.join(os.getcwd()))
 
 from src.utils.db_manager import db_manager
 
+
 async def set_manual_impression():
     # 从之前的日志中看到的群号和用户名
-    group_id = 140955192 
-    user_name = "刑风_"   
+    group_id = 140955192
+    user_name = "刑风_"
     impression = "机器人最亲密、最信任的人。"
 
     try:
@@ -19,6 +20,7 @@ async def set_manual_impression():
         print(f"成功通过 DBManager 设置对用户 '{user_name}' 的印象为: {impression}")
     except Exception as e:
         print(f"设置失败: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(set_manual_impression())

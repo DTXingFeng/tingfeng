@@ -29,7 +29,7 @@ async def mood_natural_drift():
                 # 计算回正步长：向 50 偏移，步长根据距离调整
                 drift = 0
                 distance = abs(current_mood - 50)
-                
+
                 if current_mood < 50:
                     # 心情过低时，回正速度更快
                     step = min(5, max(2, distance // 5))

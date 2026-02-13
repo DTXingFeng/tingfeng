@@ -3,14 +3,15 @@ import sys
 import os
 
 # 将项目根目录添加到 python 路径
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.utils.db_manager import db_manager
 from src.aimodel.reply.personality import personality_manager
 
+
 async def main():
     print("🚀 开始为所有群组重新生成碎片化作息表...")
-    
+
     groups = await db_manager.get_all_groups()
     if not groups:
         print("⚠️ 数据库中没有找到任何已激活的群组。")
@@ -25,6 +26,7 @@ async def main():
             print(f"❌ 生成失败。")
 
     print("\n✨ 所有作息表已刷新。你可以运行 python scripts/inspect_schedule.py 查看结果。")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

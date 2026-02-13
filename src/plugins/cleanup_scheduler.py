@@ -107,9 +107,5 @@ async def start_cleanup_scheduler():
     asyncio.create_task(cleanup_vector_db_task())
 
     logger.info(
-        "清理调度器已启动: "
-        "数据库清理(24h/次), "
-        "数据库优化(7天/次), "
-        "回复历史清理(12h/次), "
-        "向量库清理(48h/次)"
+        "清理调度器已启动: " "数据库清理(24h/次), " "数据库优化(7天/次), " "回复历史清理(12h/次), " "向量库清理(48h/次)"
     )

@@ -9,6 +9,7 @@ from src.mcp.tools.knowledge import KnowledgeQueryTool, GetCreatorKnowledgeTool,
 from src.mcp.tools.utility import GetCurrentTimeTool, IsWithinScheduleTool, FormatTextTool, CountWordsTool
 from src.mcp.tools.message import GetRecentMessagesTool, GetMessageContextTool
 from src.mcp.tools.system import GetSystemResourceTool, GetNetworkInfoTool, GetBootTimeTool, GetRaspberryPiInfoTool
+from src.mcp.tools.forward import GetForwardMessageTool, ParseForwardMessageTool, FormatForwardMessagesTool
 from src.mcp.registry import tool_registry
 from src.utils.logger import get_logger
 
@@ -55,6 +56,11 @@ def load_all_tools():
     tool_registry.register(GetBootTimeTool())
     tool_registry.register(GetRaspberryPiInfoTool())
 
+    # 合并转发消息工具
+    tool_registry.register(GetForwardMessageTool())
+    tool_registry.register(ParseForwardMessageTool())
+    tool_registry.register(FormatForwardMessagesTool())
+
     logger.info(f"MCP 工具加载完成！共注册 {len(tool_registry.list_tools())} 个工具")
 
     # 输出已注册的工具列表
@@ -71,7 +77,16 @@ def get_tools_summary() -> dict:
     """
     tools = tool_registry.list_tools()
 
-    summary = {"total": len(tools), "memory": [], "user": [], "knowledge": [], "utility": [], "message": [], "system": []}
+    summary = {
+        "total": len(tools),
+        "memory": [],
+        "user": [],
+        "knowledge": [],
+        "utility": [],
+        "message": [],
+        "system": [],
+        "forward": [],
+    }
 
     for tool_name in tools:
         tool = tool_registry.get_tool(tool_name)
@@ -81,10 +96,19 @@ def get_tools_summary() -> dict:
             summary["user"].append(tool_name)
         elif tool_name.startswith("knowledge"):
             summary["knowledge"].append(tool_name)
+        elif (
+            tool_name.startswith("get_")
+            and "forward" in tool_name
+            or tool_name.startswith("forward")
+            or "forward" in tool_name
+        ):
+            summary["forward"].append(tool_name)
+        elif tool_name.startswith("get_") and (
+            "system" in tool_name or "network" in tool_name or "boot" in tool_name or "raspberry" in tool_name
+        ):
+            summary["system"].append(tool_name)
         elif tool_name.startswith("get_") and "message" in tool_name or tool_name.startswith("message"):
             summary["message"].append(tool_name)
-        elif tool_name.startswith("get_") and ("system" in tool_name or "network" in tool_name or "boot" in tool_name or "raspberry" in tool_name):
-            summary["system"].append(tool_name)
         else:
             summary["utility"].append(tool_name)
 
@@ -116,6 +140,9 @@ if __name__ == "__main__":
             print(f"  - {t}")
         print(f"\n系统监控工具 ({len(summary['system'])}):")
         for t in summary["system"]:
+            print(f"  - {t}")
+        print(f"\n合并转发工具 ({len(summary['forward'])}):")
+        for t in summary["forward"]:
             print(f"  - {t}")
 
         print("\n测试工具调用...")

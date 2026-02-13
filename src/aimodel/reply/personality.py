@@ -124,12 +124,12 @@ class PersonalityManager:
                 temperature=0.8,
                 stream=True,
             )
-            
+
             thoughts = ""
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     thoughts += chunk.choices[0].delta.content
-            
+
             thoughts = thoughts.strip()
             # 更新到数据库
             await db_manager.update_personality_state(group_id, thoughts=thoughts)
@@ -242,12 +242,12 @@ class PersonalityManager:
                 response_format={"type": "json_object"},
                 stream=True,
             )
-            
+
             result = ""
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     result += chunk.choices[0].delta.content
-            
+
             result = result.strip()
 
             # 解析 JSON 并处理各种可能的格式
@@ -351,12 +351,12 @@ class PersonalityManager:
                 response_format={"type": "json_object"},
                 stream=True,
             )
-            
+
             result = ""
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     result += chunk.choices[0].delta.content
-            
+
             result = result.strip()
 
             try:
@@ -460,12 +460,12 @@ class PersonalityManager:
                 response_format={"type": "json_object"},
                 stream=True,
             )
-            
+
             result = ""
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     result += chunk.choices[0].delta.content
-            
+
             result = result.strip()
 
             try:
@@ -593,12 +593,12 @@ class PersonalityManager:
                 temperature=0.2,
                 stream=True,
             )
-            
+
             final_def = ""
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     final_def += chunk.choices[0].delta.content
-            
+
             final_def = final_def.strip()
             await db_manager.update_slang_candidate(
                 group_id, phrase, delta_freq=0, stage=new_stage, definition=final_def
@@ -606,7 +606,9 @@ class PersonalityManager:
         except Exception as e:
             logger.error(f"黑话定义修正失败: {e}", exc_info=True)
 
-    async def evolve_personality(self, group_id: int, user_name: str, user_msg: str, user_id: int = None, bot_reply: str = None):
+    async def evolve_personality(
+        self, group_id: int, user_name: str, user_msg: str, user_id: int = None, bot_reply: str = None
+    ):
         """
         根据交互进化性格特征值和用户关系。
         """
@@ -689,12 +691,12 @@ class PersonalityManager:
                 response_format={"type": "json_object"},
                 stream=True,
             )
-            
+
             vibe_json = ""
             async for chunk in stream:
                 if chunk.choices and chunk.choices[0].delta.content:
                     vibe_json += chunk.choices[0].delta.content
-            
+
             vibe_json = vibe_json.strip()
 
             # 验证并规范化 JSON 格式

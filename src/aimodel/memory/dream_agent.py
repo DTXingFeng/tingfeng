@@ -98,7 +98,7 @@ async def dream_and_optimize(group_id: int):
                         group_id=group_id,
                         old_patterns=old_patterns,
                         new_context=new_pattern.get("context", ""),
-                        new_style_desc=new_pattern.get("style_desc", "")
+                        new_style_desc=new_pattern.get("style_desc", ""),
                     )
                     if success:
                         merge_count += 1
@@ -109,14 +109,12 @@ async def dream_and_optimize(group_id: int):
                     group_id=group_id,
                     subject=delete_item.get("subject"),
                     predicate=delete_item.get("predicate"),
-                    obj=delete_item.get("object")
+                    obj=delete_item.get("object"),
                 )
                 delete_count += deleted
             elif delete_item.get("type") == "style_pattern":
                 deleted = await db_manager.delete_style_pattern(
-                    group_id=group_id,
-                    context=delete_item.get("context"),
-                    style_desc=delete_item.get("style_desc")
+                    group_id=group_id, context=delete_item.get("context"), style_desc=delete_item.get("style_desc")
                 )
                 delete_count += deleted
 

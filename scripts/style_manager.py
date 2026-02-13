@@ -58,37 +58,37 @@ class StyleManager:
     def get_group_id(self, allow_all=True):
         """
         获取群组 ID - 通过列表选择
-        
+
         Args:
             allow_all: 是否允许选择"所有群组"
         """
         groups = self.list_all_groups()
-        
+
         if not groups:
             print("\n没有找到任何群组")
             return None
-        
+
         print("\n" + "=" * 50)
         print("请选择群组:")
         print("=" * 50)
-        
+
         for i, group_id in enumerate(groups, 1):
             print(f"{i}. 群组 {group_id}")
-        
+
         if allow_all:
             print(f"0. 所有群组")
-        
+
         while True:
             choice = input(f"\n请输入选项 (0-{len(groups)}): ").strip()
-            
+
             if allow_all and choice == "0":
                 return None
-            
+
             if choice.isdigit():
                 idx = int(choice) - 1
                 if 0 <= idx < len(groups):
                     return groups[idx]
-            
+
             print(f"无效的选项，请输入 0-{len(groups)}")
 
     def get_connection(self):
@@ -130,7 +130,7 @@ class StyleManager:
                            FROM style_patterns 
                            WHERE group_id = ? 
                            ORDER BY weight DESC""",
-                        (group_id,)
+                        (group_id,),
                     )
                 else:
                     cursor.execute(
@@ -154,12 +154,12 @@ class StyleManager:
                         if current_group != row["group_id"]:
                             current_group = row["group_id"]
                             print(f"\n>>> 群组 {current_group} <<<")
-                    
+
                     style_id = row["id"]
                     context = row["context"][:30] + "..." if len(row["context"]) > 30 else row["context"]
                     style = row["style_desc"][:40] + "..." if len(row["style_desc"]) > 40 else row["style_desc"]
                     weight = row["weight"]
-                    
+
                     print(f"  [{style_id:3d}] {context:30s} | {style:40s} | 权重:{weight:2d}")
 
         except Exception as e:
@@ -182,7 +182,7 @@ class StyleManager:
                            WHERE group_id = ? 
                            ORDER BY weight DESC 
                            LIMIT ?""",
-                        (group_id, limit)
+                        (group_id, limit),
                     )
                 else:
                     cursor.execute(
@@ -190,7 +190,7 @@ class StyleManager:
                            FROM style_patterns 
                            ORDER BY weight DESC 
                            LIMIT ?""",
-                        (limit,)
+                        (limit,),
                     )
 
                 rows = cursor.fetchall()
@@ -232,7 +232,7 @@ class StyleManager:
                            WHERE group_id = ? 
                            ORDER BY weight ASC 
                            LIMIT ?""",
-                        (group_id, limit)
+                        (group_id, limit),
                     )
                 else:
                     cursor.execute(
@@ -240,7 +240,7 @@ class StyleManager:
                            FROM style_patterns 
                            ORDER BY weight ASC 
                            LIMIT ?""",
-                        (limit,)
+                        (limit,),
                     )
 
                 rows = cursor.fetchall()
@@ -284,7 +284,7 @@ class StyleManager:
                            FROM style_patterns 
                            WHERE group_id = ? AND context LIKE ? 
                            ORDER BY weight DESC""",
-                        (group_id, f"%{keyword}%")
+                        (group_id, f"%{keyword}%"),
                     )
                 else:
                     cursor.execute(
@@ -292,7 +292,7 @@ class StyleManager:
                            FROM style_patterns 
                            WHERE context LIKE ? 
                            ORDER BY weight DESC""",
-                        (f"%{keyword}%",)
+                        (f"%{keyword}%",),
                     )
 
                 rows = cursor.fetchall()
@@ -337,7 +337,7 @@ class StyleManager:
                            FROM style_patterns 
                            WHERE group_id = ? AND (context LIKE ? OR style_desc LIKE ?) 
                            ORDER BY weight DESC""",
-                        (group_id, f"%{keyword}%", f"%{keyword}%")
+                        (group_id, f"%{keyword}%", f"%{keyword}%"),
                     )
                 else:
                     cursor.execute(
@@ -345,7 +345,7 @@ class StyleManager:
                            FROM style_patterns 
                            WHERE context LIKE ? OR style_desc LIKE ? 
                            ORDER BY weight DESC""",
-                        (f"%{keyword}%", f"%{keyword}%")
+                        (f"%{keyword}%", f"%{keyword}%"),
                     )
 
                 rows = cursor.fetchall()
@@ -399,7 +399,7 @@ class StyleManager:
                        VALUES (?, ?, ?, ?)
                        ON CONFLICT(group_id, context, style_desc) DO UPDATE SET
                        weight = weight + ?""",
-                    (group_id, context, style_desc, weight, weight)
+                    (group_id, context, style_desc, weight, weight),
                 )
                 conn.commit()
 
@@ -425,7 +425,7 @@ class StyleManager:
                     """SELECT group_id, context, style_desc, weight 
                        FROM style_patterns 
                        WHERE id = ?""",
-                    (int(style_id),)
+                    (int(style_id),),
                 )
                 row = cursor.fetchone()
 
@@ -455,23 +455,23 @@ class StyleManager:
                         """UPDATE style_patterns 
                            SET context = ? 
                            WHERE id = ?""",
-                        (new_context, int(style_id))
+                        (new_context, int(style_id)),
                     )
-                
+
                 if new_style:
                     cursor.execute(
                         """UPDATE style_patterns 
                            SET style_desc = ? 
                            WHERE id = ?""",
-                        (new_style, int(style_id))
+                        (new_style, int(style_id)),
                     )
-                
+
                 if new_weight is not None:
                     cursor.execute(
                         """UPDATE style_patterns 
                            SET weight = ? 
                            WHERE id = ?""",
-                        (new_weight, int(style_id))
+                        (new_weight, int(style_id)),
                     )
 
                 conn.commit()
@@ -492,10 +492,7 @@ class StyleManager:
 
             with self.get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    """SELECT context, style_desc FROM style_patterns WHERE id = ?""",
-                    (int(style_id),)
-                )
+                cursor.execute("""SELECT context, style_desc FROM style_patterns WHERE id = ?""", (int(style_id),))
                 row = cursor.fetchone()
 
                 if not row:
@@ -507,7 +504,7 @@ class StyleManager:
                 print(f"   风格: {row['style_desc']}")
 
                 confirm = input("\n确认删除？(yes/no): ").strip().lower()
-                if confirm not in ['yes', 'y']:
+                if confirm not in ["yes", "y"]:
                     print("已取消")
                     return
 
@@ -557,13 +554,13 @@ class StyleManager:
                     cursor.execute(
                         """SELECT COUNT(*) FROM style_patterns 
                            WHERE group_id = ? AND context LIKE ?""",
-                        (group_id, f"%{keyword}%")
+                        (group_id, f"%{keyword}%"),
                     )
                 else:
                     cursor.execute(
                         """SELECT COUNT(*) FROM style_patterns 
                            WHERE context LIKE ?""",
-                        (f"%{keyword}%",)
+                        (f"%{keyword}%",),
                     )
 
                 count = cursor.fetchone()[0]
@@ -574,7 +571,7 @@ class StyleManager:
 
                 print(f"\n将删除 {count} 条包含 '{keyword}' 的风格模式")
                 confirm = input("\n确认删除？(yes/no): ").strip().lower()
-                if confirm not in ['yes', 'y']:
+                if confirm not in ["yes", "y"]:
                     print("已取消")
                     return
 
@@ -582,13 +579,13 @@ class StyleManager:
                     cursor.execute(
                         """DELETE FROM style_patterns 
                            WHERE group_id = ? AND context LIKE ?""",
-                        (group_id, f"%{keyword}%")
+                        (group_id, f"%{keyword}%"),
                     )
                 else:
                     cursor.execute(
                         """DELETE FROM style_patterns 
                            WHERE context LIKE ?""",
-                        (f"%{keyword}%",)
+                        (f"%{keyword}%",),
                     )
 
                 conn.commit()
@@ -616,13 +613,13 @@ class StyleManager:
                     cursor.execute(
                         """SELECT COUNT(*) FROM style_patterns 
                            WHERE group_id = ? AND weight < ?""",
-                        (group_id, int(max_weight))
+                        (group_id, int(max_weight)),
                     )
                 else:
                     cursor.execute(
                         """SELECT COUNT(*) FROM style_patterns 
                            WHERE weight < ?""",
-                        (int(max_weight),)
+                        (int(max_weight),),
                     )
 
                 count = cursor.fetchone()[0]
@@ -633,7 +630,7 @@ class StyleManager:
 
                 print(f"\n将删除 {count} 条权重小于 {max_weight} 的风格模式")
                 confirm = input("\n确认删除？(yes/no): ").strip().lower()
-                if confirm not in ['yes', 'y']:
+                if confirm not in ["yes", "y"]:
                     print("已取消")
                     return
 
@@ -641,13 +638,13 @@ class StyleManager:
                     cursor.execute(
                         """DELETE FROM style_patterns 
                            WHERE group_id = ? AND weight < ?""",
-                        (group_id, int(max_weight))
+                        (group_id, int(max_weight)),
                     )
                 else:
                     cursor.execute(
                         """DELETE FROM style_patterns 
                            WHERE weight < ?""",
-                        (int(max_weight),)
+                        (int(max_weight),),
                     )
 
                 conn.commit()
@@ -677,17 +674,17 @@ class StyleManager:
                 if not delta.isdigit():
                     print("无效的权重值")
                     return
-                
+
                 with self.get_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """UPDATE style_patterns 
                            SET weight = weight + ? 
                            WHERE group_id = ?""",
-                        (int(delta), group_id)
+                        (int(delta), group_id),
                     )
                     conn.commit()
-                
+
                 print(f"\n✓ 成功增加权重！")
 
             elif choice == "2":
@@ -695,17 +692,17 @@ class StyleManager:
                 if not delta.isdigit():
                     print("无效的权重值")
                     return
-                
+
                 with self.get_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """UPDATE style_patterns 
                            SET weight = MAX(1, weight - ?) 
                            WHERE group_id = ?""",
-                        (int(delta), group_id)
+                        (int(delta), group_id),
                     )
                     conn.commit()
-                
+
                 print(f"\n✓ 成功减少权重！")
 
             elif choice == "3":
@@ -713,17 +710,17 @@ class StyleManager:
                 if not new_weight.isdigit():
                     print("无效的权重值")
                     return
-                
+
                 with self.get_connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """UPDATE style_patterns 
                            SET weight = ? 
                            WHERE group_id = ?""",
-                        (int(new_weight), group_id)
+                        (int(new_weight), group_id),
                     )
                     conn.commit()
-                
+
                 print(f"\n✓ 成功重置权重！")
 
             else:
@@ -745,7 +742,7 @@ class StyleManager:
                         """SELECT COUNT(*), AVG(weight), MAX(weight), MIN(weight)
                            FROM style_patterns 
                            WHERE group_id = ?""",
-                        (group_id,)
+                        (group_id,),
                     )
                 else:
                     cursor.execute(
@@ -774,7 +771,7 @@ class StyleManager:
                            GROUP BY context 
                            ORDER BY cnt DESC 
                            LIMIT 5""",
-                        (group_id,)
+                        (group_id,),
                     )
                 else:
                     cursor.execute(
@@ -817,16 +814,10 @@ class StyleManager:
                 cursor = conn.cursor()
 
                 if group_id:
-                    cursor.execute(
-                        """SELECT COUNT(*) FROM style_patterns WHERE group_id = ?""",
-                        (group_id,)
-                    )
+                    cursor.execute("""SELECT COUNT(*) FROM style_patterns WHERE group_id = ?""", (group_id,))
                     count = cursor.fetchone()[0]
 
-                    cursor.execute(
-                        """DELETE FROM style_patterns WHERE group_id = ?""",
-                        (group_id,)
-                    )
+                    cursor.execute("""DELETE FROM style_patterns WHERE group_id = ?""", (group_id,))
                 else:
                     cursor.execute("""SELECT COUNT(*) FROM style_patterns""")
                     count = cursor.fetchone()[0]
@@ -871,16 +862,18 @@ class StyleManager:
 
 def main():
     """主函数"""
-    print("""
+    print(
+        """
     ╔════════════════════════════════════════════════╗
     ║       Bot 风格管理工具 v1.0                    ║
     ║                                                ║
     ║  管理 bot 学习到的说话风格模式                ║
     ╚════════════════════════════════════════════════╝
-    """)
+    """
+    )
 
     manager = StyleManager()
-    
+
     try:
         manager.run()
     except KeyboardInterrupt:

@@ -79,7 +79,7 @@ class GetUserMemoriesTool(BaseTool):
         user_id = await db_manager.get_user_id_by_name(group_id, user_name)
         if not user_id:
             raise ValueError(f"未找到用户 '{user_name}' 的 QQ 号，请让该用户先在群内发言")
-        
+
         # 获取用户印象（跨群查询）
         impression = await db_manager.get_user_impression_cross_group(group_id, user_id)
 

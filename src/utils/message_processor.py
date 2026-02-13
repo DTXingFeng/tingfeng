@@ -194,4 +194,10 @@ async def process_message_for_llm(bot: Bot, event: GroupMessageEvent, vlm_func=N
                     abstract = await get_message_abstract(bot, int(reply_id))
                     cleaned_parts.append(f'[回复: "{abstract}"]')
 
+        elif seg.type == "forward":
+            forward_id = seg.data.get("id")
+            if forward_id:
+                cleaned_parts.append(f"[合并转发消息 ID:{forward_id}]")
+                cleaned_parts.append(f"(你可以使用 get_forward_message 工具来查看此合并转发的详细内容)")
+
     return " ".join(cleaned_parts)

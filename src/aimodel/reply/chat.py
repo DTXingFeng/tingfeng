@@ -177,8 +177,8 @@ async def get_chat_reply(
         "1. **去 AI 化**：拒绝条理性，拒绝解释，拒绝助手感。你的回答应该像一个真实的群友在随性发言。\n"
         "2. **风格对齐**：请确保你的回答符合上述'社交模仿模式'和'当前情绪状态'。如果捕捉到的风格要求你'慵懒'，就用最少的字；如果要求'热情'，可以多说几个词。\n"
         "3. **黑话融合**：在自然的情况下使用学习到的群内黑话，让你的话看起来像是长期混迹该群的幽灵。\n"
-        "4. **极致碎片化**：严禁输出长句。严禁使用句号。\n"
-        "5. **简短克制**：你已经通过决策引擎判断过应该回复，所以回复时请保持精炼。一句话能说完的，绝对不用两句。宁可回得太少，也不要回得太多。\n"
+        "4. **极致碎片化**：严禁输出长句。严禁使用句号。**禁止使用换行符，只回复一句话**。\n"
+        "5. **简短克制**：你已经通过决策引擎判断过应该回复，所以回复时请保持精炼。**严格控制回复长度，不超过20个字**。宁可回得太少，也不要回得太多。\n"
         "6. **亲民接地气**：不要用技术术语炫耀，不要用贬低性词汇。你是群里的一员，说话要像个普通群友，轻松自然。\n"
         "7. **禁止解释笑点**：绝对不要解释为什么好笑！大家都能看懂的东西，不要说「这不就是xx吗」、「笑点解析」之类的话。直接反应就行，比如「笑死」、「乐」、「绷不住了」。宁可只回一个表情，也不要解释笑点。\n"
         "8. **表情包使用**：你应该在适当的时候使用表情包来表达情绪，在回复末尾加上 '[表情:标签名]'。可选标签：开心、暴躁、委屈、得意、傲娇、摸摸头、疑惑、震惊、大哭。示例：'乐[表情:开心]' 或 '[表情:疑惑]'（只发表情包也可以）。\n"
@@ -187,9 +187,9 @@ async def get_chat_reply(
     # 注入关系状态引导
     rel_instruction = ""
     if rel_status == "死对头":
-        rel_instruction = "你不太喜欢这个人，语气稍微冷淡一些，但也不要太刻薄。"
+        rel_instruction = "你与此人关系一般，保持基本的礼貌即可，说话简短一些。"
     elif rel_status == "厌恶":
-        rel_instruction = "你对此人没有太多好感，保持一点距离，但也不必太针对。"
+        rel_instruction = "你与此人不太熟悉，保持中立态度，正常交流即可。"
     elif rel_status == "陌生人":
         rel_instruction = "你对此人不太熟悉，就当普通群友一样自然聊天就好。"
     elif rel_status == "朋友":
@@ -316,7 +316,7 @@ async def get_chat_reply(
         stream_params = {
             "model": creds["model"],
             "messages": optimized_messages,
-            "max_tokens": 500,
+            "max_tokens": 150,
             "temperature": 0.7,
             "stream": True,
         }
@@ -393,7 +393,7 @@ async def get_chat_reply(
                     stream = await client.chat.completions.create(
                         model=creds["model"],
                         messages=optimized_messages + [tool_result_message],
-                        max_tokens=500,
+                        max_tokens=150,
                         temperature=0.7,
                         stream=True,
                     )
@@ -411,11 +411,11 @@ async def get_chat_reply(
             # 没有工具调用，使用收集到的文本
             reply_content = reply_content.strip()
 
-        # 1. 提取并处理表情包标签
+        # 1. 提取并处理表情包标签（40%概率发送，避免刷屏）
         sticker_url = None
         sticker_pattern = r"\[\s*表情\s*[:：]\s*(.*?)\s*\]"
         sticker_match = re.search(sticker_pattern, reply_content)
-        if sticker_match:
+        if sticker_match and random.random() < 0.4:
             tag = sticker_match.group(1).strip()
             logger.debug(f"检测到表情包标签: {tag}")
             # 从数据库中随机选一个对应标签的表情包

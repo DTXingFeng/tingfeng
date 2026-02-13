@@ -852,10 +852,9 @@ class DBManager:
         """获取用户印象（跨群查询）"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            
+
             await cursor.execute(
-                "SELECT impression FROM user_profiles WHERE user_id = ? ORDER BY updated_at DESC",
-                (user_id,)
+                "SELECT impression FROM user_profiles WHERE user_id = ? ORDER BY updated_at DESC", (user_id,)
             )
 
             rows = await cursor.fetchall()
@@ -868,7 +867,7 @@ class DBManager:
         """获取用户具体记忆（跨群查询）"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            
+
             await cursor.execute(
                 "SELECT content FROM user_memories WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
                 (user_id, limit),
@@ -881,10 +880,8 @@ class DBManager:
         """获取用户关系（跨群查询）"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            
-            await cursor.execute(
-                "SELECT favorability, status FROM user_relationships WHERE user_id = ?", (user_id,)
-            )
+
+            await cursor.execute("SELECT favorability, status FROM user_relationships WHERE user_id = ?", (user_id,))
 
             rows = await cursor.fetchall()
             if rows:
@@ -952,7 +949,9 @@ class DBManager:
 
         return deleted_counts
 
-    async def record_bot_reply(self, group_id: int, triggered_by: str, is_at_bot: bool = False, interest_score: float = 0):
+    async def record_bot_reply(
+        self, group_id: int, triggered_by: str, is_at_bot: bool = False, interest_score: float = 0
+    ):
         """记录 bot 的一次回复行为"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
@@ -968,7 +967,7 @@ class DBManager:
     async def get_recent_reply_count(self, group_id: int, minutes: int = 10, only_active: bool = True) -> int:
         """
         获取指定时间内的回复次数
-        
+
         Args:
             group_id: 群组ID
             minutes: 统计时间范围（分钟）
@@ -979,7 +978,7 @@ class DBManager:
         cutoff_time = (datetime.now() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            
+
             if only_active:
                 # 只统计主动发言（非艾特）
                 await cursor.execute(
@@ -998,21 +997,21 @@ class DBManager:
                     """,
                     (group_id, cutoff_time),
                 )
-            
+
             result = await cursor.fetchone()
             return result[0] if result else 0
 
     async def get_last_reply_time(self, group_id: int, only_active: bool = True) -> Optional[datetime]:
         """
         获取最后一次回复的时间
-        
+
         Args:
             group_id: 群组ID
             only_active: 是否只查询主动发言（True=不包含被艾特的回复，False=包含所有回复）
         """
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            
+
             if only_active:
                 # 只查询主动发言
                 await cursor.execute(
@@ -1033,7 +1032,7 @@ class DBManager:
                     """,
                     (group_id,),
                 )
-            
+
             result = await cursor.fetchone()
             if result:
                 from datetime import datetime
@@ -1076,7 +1075,15 @@ class DBManager:
                 (group_id, ban_reason, trigger_context, reflection_thought, lesson_learned, operator_id, duration_seconds)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (group_id, ban_reason, trigger_context, reflection_thought, lesson_learned, operator_id, duration_seconds),
+                (
+                    group_id,
+                    ban_reason,
+                    trigger_context,
+                    reflection_thought,
+                    lesson_learned,
+                    operator_id,
+                    duration_seconds,
+                ),
             )
             await conn.commit()
 

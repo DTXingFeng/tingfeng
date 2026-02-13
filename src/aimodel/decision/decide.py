@@ -7,8 +7,10 @@ from src.aimodel.memory.vector_db import vector_db
 from src.utils.context_manager import context_manager
 from src.utils.logger import get_logger
 from src.utils.error_handler import handle_errors, APIError
+from src.mcp.registry import tool_registry
 from typing import Optional
 import json
+import asyncio
 
 logger = get_logger(__name__)
 
@@ -214,6 +216,9 @@ async def should_i_reply(
     client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
     try:
+        # 获取 MCP 工具定义
+        mcp_tools = tool_registry.get_all_definitions()
+
         optimized_prompt, prompt_tokens = context_manager.truncate_text(
             text=prompt, model_alias=model_alias, max_output_tokens=200, reserve_ratio=0.1
         )
@@ -223,17 +228,87 @@ async def should_i_reply(
                 f"[上下文管理] 决策模型: {model_alias}, 使用tokens: {prompt_tokens}/{context_manager.get_model_max_tokens(model_alias)}"
             )
 
-        stream = await client.chat.completions.create(
-            model=creds["model"],
-            messages=[{"role": "user", "content": optimized_prompt}],
-            response_format={"type": "json_object"},
-            stream=True,
-        )
+        # 构建请求参数
+        request_params = {
+            "model": creds["model"],
+            "messages": [{"role": "user", "content": optimized_prompt}],
+            "response_format": {"type": "json_object"},
+            "stream": True,
+        }
+
+        # 如果有 MCP 工具可用，添加工具支持
+        if mcp_tools:
+            request_params["tools"] = mcp_tools
+            request_params["tool_choice"] = "auto"
+            # 移除 response_format，因为工具调用与 JSON 格式不兼容
+            del request_params["response_format"]
+
+        stream = await client.chat.completions.create(**request_params)
 
         content = ""
+        tool_calls_buffer = {}  # 存储工具调用
+
         async for chunk in stream:
+            # 收集文本内容
             if chunk.choices and chunk.choices[0].delta.content:
                 content += chunk.choices[0].delta.content
+
+            # 收集工具调用
+            if chunk.choices and chunk.choices[0].delta.tool_calls:
+                for tool_call in chunk.choices[0].delta.tool_calls:
+                    idx = tool_call.index
+                    if idx not in tool_calls_buffer:
+                        tool_calls_buffer[idx] = {"id": tool_call.id, "name": "", "arguments": ""}
+
+                    if tool_call.function and tool_call.function.name:
+                        tool_calls_buffer[idx]["name"] = tool_call.function.name
+                    if tool_call.function and tool_call.function.arguments:
+                        tool_calls_buffer[idx]["arguments"] += tool_call.function.arguments
+
+        # 如果有工具调用，执行并重新请求
+        if tool_calls_buffer:
+            logger.info(f"决策模型调用 {len(tool_calls_buffer)} 个工具")
+
+            for idx, tool_call in tool_calls_buffer.items():
+                tool_name = tool_call["name"]
+                tool_args = tool_call["arguments"]
+
+                if not tool_name:
+                    continue
+
+                logger.info(f"决策模型调用工具: {tool_name}")
+
+                try:
+                    import json as json_lib
+
+                    if isinstance(tool_args, str):
+                        tool_args = json_lib.loads(tool_args)
+                except json_lib.JSONDecodeError as e:
+                    logger.error(f"工具参数解析失败: {e}")
+                    tool_args = {}
+
+                # 执行工具
+                tool_result = await tool_registry.execute(tool_name, **tool_args)
+
+                if tool_result.get("success"):
+                    logger.info(f"工具 {tool_name} 执行成功")
+                    # 将工具结果添加到 prompt
+                    optimized_prompt += f"\n\n### 工具执行结果（{tool_name}）：\n{json.dumps(tool_result.get('data', {}), ensure_ascii=False)}\n"
+                else:
+                    logger.error(f"工具 {tool_name} 执行失败: {tool_result.get('error')}")
+
+            # 重新请求最终决策（不带工具）
+            stream = await client.chat.completions.create(
+                model=creds["model"],
+                messages=[{"role": "user", "content": optimized_prompt}],
+                response_format={"type": "json_object"},
+                stream=True,
+            )
+
+            content = ""
+            async for chunk in stream:
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content += chunk.choices[0].delta.content
 
         content = content.strip()
         if "```json" in content:

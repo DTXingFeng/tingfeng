@@ -94,9 +94,7 @@ class BotDataManager:
             min_freq = input("最小频率 (默认0): ").strip()
             min_freq = int(min_freq) if min_freq.isdigit() else 0
 
-            slang_list = await db_manager.get_slang_candidates(
-                group_id=group_id, min_freq=min_freq, stage=stage
-            )
+            slang_list = await db_manager.get_slang_candidates(group_id=group_id, min_freq=min_freq, stage=stage)
 
             if not slang_list:
                 print(f"\n群组 {group_id} 中没有找到符合条件的黑话")
@@ -109,9 +107,9 @@ class BotDataManager:
                 print(f"\n{i}. {slang['phrase']}")
                 print(f"   频率: {slang['frequency']}")
                 print(f"   阶段: {stage_names.get(slang['stage'], '未知')}")
-                if slang['definition']:
+                if slang["definition"]:
                     print(f"   定义: {slang['definition']}")
-                if slang['context_samples']:
+                if slang["context_samples"]:
                     print(f"   示例: {', '.join(slang['context_samples'][:3])}")
 
         except Exception as e:
@@ -201,7 +199,7 @@ class BotDataManager:
                 return
 
             confirm = input(f"\n确认删除黑话 '{phrase}'？(y/n): ").strip().lower()
-            if confirm != 'y':
+            if confirm != "y":
                 print("已取消")
                 return
 
@@ -309,7 +307,7 @@ class BotDataManager:
                 return
 
             delta_input = input("好感度变化量 (正数增加，负数减少，默认0): ").strip()
-            delta = int(delta_input) if delta_input.lstrip('-').isdigit() else 0
+            delta = int(delta_input) if delta_input.lstrip("-").isdigit() else 0
 
             new_status = input("新关系状态 (直接回车自动推断): ").strip() or None
 
@@ -349,7 +347,7 @@ class BotDataManager:
                 user_name = parts[0].strip()
                 delta = parts[1].strip()
 
-                if not delta.lstrip('-').isdigit():
+                if not delta.lstrip("-").isdigit():
                     print(f"变化量必须是数字: {delta}")
                     continue
 

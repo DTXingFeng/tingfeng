@@ -51,12 +51,18 @@ class ReplyContextBuilder:
             from src.aimodel.memory.vector_db import vector_db
 
             context["history"] = await db_manager.get_chat_log(group_id, limit=20)
-            context["user_profile"] = await db_manager.get_user_impression_cross_group(group_id, user_id) if user_id else None
-            context["user_specific_memories"] = await db_manager.get_user_specific_memories_cross_group(
-                group_id, user_id, limit=5
-            ) if user_id else []
+            context["user_profile"] = (
+                await db_manager.get_user_impression_cross_group(group_id, user_id) if user_id else None
+            )
+            context["user_specific_memories"] = (
+                await db_manager.get_user_specific_memories_cross_group(group_id, user_id, limit=5) if user_id else []
+            )
 
-            relationship_data = await db_manager.get_user_relationship_cross_group(group_id, user_id) if user_id else {"favorability": 50, "status": "陌生人"}
+            relationship_data = (
+                await db_manager.get_user_relationship_cross_group(group_id, user_id)
+                if user_id
+                else {"favorability": 50, "status": "陌生人"}
+            )
             context["relationship_data"] = relationship_data
 
             context["personality_state"] = await db_manager.get_personality_state(group_id)
@@ -263,17 +269,15 @@ class ReplyContextBuilder:
 
         rel_instruction = ""
         if rel_status == "死对头":
-            rel_instruction = "你不太喜欢这个人，语气稍微冷淡一些，但也不要太刻薄。"
+            rel_instruction = "你与此人关系一般，保持基本的礼貌即可，说话简短一些。"
         elif rel_status == "厌恶":
-            rel_instruction = "你对此人没有太多好感，保持一点距离，但也不必太针对。"
+            rel_instruction = "你与此人不太熟悉，保持中立态度，正常交流即可。"
         elif rel_status == "陌生人":
             rel_instruction = "你对此人不太熟悉，就当普通群友一样自然聊天就好。"
         elif rel_status == "朋友":
             rel_instruction = "你对此人有一定好感，可以轻松随意地聊，偶尔开开玩笑。"
         elif rel_status == "死党":
-            rel_instruction = (
-                "此人是你在群里为数不多的熟人，你可以更放松更随意一些，不用太拘束。"
-            )
+            rel_instruction = "此人是你在群里为数不多的熟人，你可以更放松更随意一些，不用太拘束。"
 
         system_prompt += f"\n### 你与 {user_name} 的当前关系：\n- **状态**：{rel_status} (好感度: {rel_fav}/100)\n- **行为准则**：{rel_instruction}\n"
 
