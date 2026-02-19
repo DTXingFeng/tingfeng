@@ -61,7 +61,7 @@ class GetForwardMessageTool(BaseTool):
 
                 # 尝试多种方式提取消息内容
                 content = msg.get("content", msg.get("raw_message", ""))
-                
+
                 # 如果 content 是列表（结构化消息），则提取文本
                 if isinstance(content, list):
                     text_parts = []
@@ -69,7 +69,7 @@ class GetForwardMessageTool(BaseTool):
                         if seg.get("type") == "text":
                             text_parts.append(seg.get("data", {}).get("text", ""))
                     content = "".join(text_parts)
-                
+
                 # 如果还是空，尝试从 message 字段提取
                 if not content or content == "":
                     message_list = msg.get("message", [])
@@ -170,7 +170,7 @@ class ParseForwardMessageTool(BaseTool):
 
                 # 尝试多种方式提取消息内容
                 content = msg.get("content", msg.get("raw_message", ""))
-                
+
                 # 如果 content 是列表（结构化消息），则提取文本
                 if isinstance(content, list):
                     text_parts = []
@@ -178,7 +178,7 @@ class ParseForwardMessageTool(BaseTool):
                         if seg.get("type") == "text":
                             text_parts.append(seg.get("data", {}).get("text", ""))
                     content = "".join(text_parts)
-                
+
                 # 如果还是空，尝试从 message 字段提取
                 if not content or content == "":
                     message_list = msg.get("message", [])
@@ -222,13 +222,19 @@ class FormatForwardMessagesTool(BaseTool):
         "messages": {
             "type": "array",
             "description": "合并转发的消息列表（来自 get_forward_message）",
-            "required": True,
             "items": {
                 "type": "object",
                 "description": "单条消息对象",
+                "properties": {
+                    "sender_id": {"type": "integer", "description": "发送者 QQ 号"},
+                    "sender_nickname": {"type": "string", "description": "发送者昵称"},
+                    "sender_card": {"type": "string", "description": "发送者群名片"},
+                    "content": {"type": "string", "description": "消息内容"},
+                    "time": {"type": "integer", "description": "发送时间戳"},
+                },
             },
         },
-        "include_time": {"type": "boolean", "description": "是否包含时间信息", "required": False},
+        "include_time": {"type": "boolean", "description": "是否包含时间信息"},
     }
 
     async def execute(self, messages: List[Dict[str, Any]], include_time: bool = False) -> Dict[str, str]:

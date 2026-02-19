@@ -250,12 +250,12 @@ async def should_i_reply(
             client=client,
             use_response_format=not bool(mcp_tools),  # 有工具时不使用 response_format
             base_url=creds["base_url"],
-            **base_params
+            **base_params,
         )
 
         # 收集工具调用的字典
         tool_calls_buffer = {}
-        
+
         async def tool_chunk_callback(chunk):
             """收集工具调用的回调函数"""
             if chunk.choices and chunk.choices[0].delta.tool_calls:
@@ -275,9 +275,9 @@ async def should_i_reply(
             collect_thinking=True,
             chunk_callback=tool_chunk_callback,
         )
-        
+
         content = stream_result["content"]
-        
+
         # 记录思考模式状态
         if stream_result["has_thinking"]:
             logger.info(f"决策模型使用思考模式: 推理长度={len(stream_result['thinking'])}")
@@ -330,7 +330,7 @@ async def should_i_reply(
                 model_name=creds["model"],
                 collect_thinking=True,
             )
-            
+
             content = final_stream_result["content"]
 
         content = content.strip()
@@ -394,7 +394,8 @@ async def should_i_reply(
             "is_replying_to_bot": False,
         }
     except Exception as e:
-        logger.error(f"决策过程出错: {type(e).__name__}: {str(e)}", exc_info=True)
+        error_msg = str(e) if str(e) else type(e).__name__
+        logger.error(f"决策过程出错: {type(e).__name__}: {error_msg}", exc_info=True)
         return {
             "should_reply": is_at_me,
             "mood_impact": 0,

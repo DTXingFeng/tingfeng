@@ -86,13 +86,19 @@ class BaseTool(ABC):
         required = []
 
         for param_name, param_def in self.parameters.items():
-            properties[param_name] = {
+            param_props = {
                 "type": param_def.get("type", "string"),
                 "description": param_def.get("description", ""),
             }
 
             if param_def.get("required", False):
                 required.append(param_name)
+
+            # 处理数组类型的 items 字段
+            if "items" in param_def:
+                param_props["items"] = param_def["items"]
+
+            properties[param_name] = param_props
 
         return {
             "type": "function",
