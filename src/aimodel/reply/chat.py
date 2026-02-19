@@ -8,6 +8,7 @@ from src.aimodel.reply.personality import personality_manager
 from src.utils.context_manager import context_manager
 from src.utils.logger import get_logger
 from src.utils.error_handler import handle_errors, APIError
+from src.utils.thinking_mode import thinking_handler, stream_with_thinking_mode
 from src.mcp.registry import tool_registry
 from typing import List, Optional, Dict, Any
 import random
@@ -306,6 +307,7 @@ async def get_chat_reply(
         )
 
     # 5. 调用 AI（全面使用流式传输）
+    logger.info(f"开始调用回复模型: {model_alias} (base_url={creds['base_url']})")
     client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
     try:
@@ -325,18 +327,11 @@ async def get_chat_reply(
             stream_params["tools"] = mcp_tools
             stream_params["tool_choice"] = "auto"
 
-        # 第一次流式调用：检查是否需要工具调用
-        stream = await client.chat.completions.create(**stream_params)
-
-        reply_content = ""
-        tool_calls_dict = {}
-
-        async for chunk in stream:
-            # 收集文本内容
-            if chunk.choices and chunk.choices[0].delta.content:
-                reply_content += chunk.choices[0].delta.content
-
-            # 收集 tool_calls（可能分多个 chunk 返回，需要根据 index 累积）
+        # 第一次流式调用：使用思考模式处理器
+        logger.debug(f"发送请求到 LLM: {creds['model']}")
+        
+        async def chunk_callback_wrapper(chunk):
+            """收集工具调用的回调函数"""
             if chunk.choices and chunk.choices[0].delta.tool_calls:
                 for tool_call_chunk in chunk.choices[0].delta.tool_calls:
                     idx = tool_call_chunk.index
@@ -353,7 +348,41 @@ async def get_chat_reply(
                             tool_calls_dict[idx]["name"] = tool_call_chunk.function.name
                         if tool_call_chunk.function.arguments:
                             tool_calls_dict[idx]["arguments"] += tool_call_chunk.function.arguments
-
+        
+        tool_calls_dict = {}
+        
+        stream = await client.chat.completions.create(**stream_params)
+        logger.debug(f"开始接收流式响应")
+        
+        # 使用思考模式处理器处理流式响应
+        stream_result = await thinking_handler.process_streaming_response(
+            stream=stream,
+            model_name=creds['model'],
+            collect_thinking=True,
+            chunk_callback=chunk_callback_wrapper,
+        )
+        
+        reply_content = stream_result["content"]
+        reasoning_content = stream_result["thinking"]
+        has_thinking = stream_result["has_thinking"]
+        elapsed = stream_result["elapsed_time"]
+        chunk_count = stream_result["chunk_count"]
+        
+        logger.info(
+            f"流式传输完成: 耗时 {elapsed:.1f}s, {chunk_count} chunks, "
+            f"内容长度 {len(reply_content)}, 推理长度 {len(reasoning_content)}, "
+            f"思考模式: {'是' if has_thinking else '否'}"
+        )
+        
+        # 如果超时导致没有内容，返回错误
+        if elapsed > 25 and not reply_content and not reasoning_content:
+            logger.error(f"流式传输超时且无内容: {elapsed:.1f}s")
+            return {"text": f"思考超时了，脑子有点卡顿... (扶额)", "sticker": None}
+        
+        # 使用最终回复，如果没有则使用推理内容（作为备选）
+        final_content = reply_content if reply_content else reasoning_content
+        final_content = final_content.strip()
+        
         # 如果有工具调用，执行并再次流式生成
         if tool_calls_dict:
             logger.info(f"检测到 {len(tool_calls_dict)} 个工具调用")
@@ -398,23 +427,28 @@ async def get_chat_reply(
                         stream=True,
                     )
 
-                    reply_content = ""
-                    async for chunk in stream:
-                        if chunk.choices and chunk.choices[0].delta.content:
-                            reply_content += chunk.choices[0].delta.content
-                    reply_content = reply_content.strip()
+                    # 使用思考模式处理器处理
+                    tool_stream_result = await thinking_handler.process_streaming_response(
+                        stream=stream,
+                        model_name=creds["model"],
+                        collect_thinking=True,
+                    )
+                    
+                    # 优先使用最终回复
+                    final_content = tool_stream_result["content"] if tool_stream_result["content"] else tool_stream_result["thinking"]
+                    final_content = final_content.strip()
                     break
                 else:
                     logger.error(f"工具 {tool_name} 执行失败: {tool_result['error']}")
                     reply_content = f"工具调用失败了...（扶额）"
         else:
             # 没有工具调用，使用收集到的文本
-            reply_content = reply_content.strip()
+            final_content = final_content
 
         # 1. 提取并处理表情包标签（40%概率发送，避免刷屏）
         sticker_url = None
         sticker_pattern = r"\[\s*表情\s*[:：]\s*(.*?)\s*\]"
-        sticker_match = re.search(sticker_pattern, reply_content)
+        sticker_match = re.search(sticker_pattern, final_content)
         if sticker_match and random.random() < 0.4:
             tag = sticker_match.group(1).strip()
             logger.debug(f"检测到表情包标签: {tag}")
@@ -427,15 +461,15 @@ async def get_chat_reply(
                 logger.warning(f"未找到标签 '{tag}' 对应的表情包")
 
         # 无论是否找到对应表情，都从文本中移除标签
-        reply_content = re.sub(r"\[\s*表情\s*[:：].*?\]", "", reply_content).strip()
+        final_content = re.sub(r"\[\s*表情\s*[:：].*?\]", "", final_content).strip()
 
         # 移除可能的 "self:" 或 "听风:" 前缀
-        if reply_content.startswith("self:"):
-            reply_content = reply_content[5:].strip()
-        elif reply_content.startswith(f"{bot_config.bot_name}:"):
-            reply_content = reply_content[len(bot_config.bot_name) + 1 :].strip()
+        if final_content.startswith("self:"):
+            final_content = final_content[5:].strip()
+        elif final_content.startswith(f"{bot_config.bot_name}:"):
+            final_content = final_content[len(bot_config.bot_name) + 1:].strip()
 
-        return {"text": reply_content, "sticker": sticker_url}
+        return {"text": final_content, "sticker": sticker_url}
 
     except APIError as e:
         logger.error(f"API调用失败: {e}")

@@ -38,17 +38,9 @@ class AIConfig(BaseModel):
     # 记忆相关功能绑定
     dream_agent_model: str = ""  # 梦境代理模型
     memory_search_model: str = ""  # 记忆搜索嵌入模型
-    memory_cluster_model: str = ""  # 记忆聚类模型
 
     # 对话相关功能绑定
     context_summary_model: str = ""  # 上下文总结模型
-    emotion_analysis_model: str = ""  # 情感分析模型
-    topic_extract_model: str = ""  # 主题提取模型
-
-    # 质量优化功能绑定
-    response_polish_model: str = ""  # 回复润色模型
-    quality_check_model: str = ""  # 质量检查模型
-    error_correction_model: str = ""  # 错误修正模型
 
 
 class AIConfigManager:
@@ -104,15 +96,8 @@ class AIConfigManager:
                 # 记忆相关功能绑定
                 dream_agent_model="qwen_7b",
                 memory_search_model="bge_m3",
-                memory_cluster_model="qwen_7b",
                 # 对话相关功能绑定
                 context_summary_model="qwen_7b",
-                emotion_analysis_model="qwen_7b",
-                topic_extract_model="qwen_7b",
-                # 质量优化功能绑定
-                response_polish_model="qwen_7b",
-                quality_check_model="qwen_7b",
-                error_correction_model="qwen_7b",
             )
             cls.save_config(default_config)
             cls._config = default_config

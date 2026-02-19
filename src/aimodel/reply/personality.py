@@ -8,6 +8,8 @@ from src.config.ai_config import ai_config, ai_config_manager
 from src.utils.context_manager import context_manager
 from src.utils.logger import get_logger
 from src.utils.error_handler import handle_errors, APIError
+from src.utils.openai_compat import openai_compat
+from src.utils.thinking_mode import thinking_handler
 from openai import AsyncOpenAI
 
 logger = get_logger(__name__)
@@ -125,17 +127,21 @@ class PersonalityManager:
                 stream=True,
             )
 
-            thoughts = ""
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    thoughts += chunk.choices[0].delta.content
-
-            thoughts = thoughts.strip()
+            # 使用思考模式处理器处理流式响应
+            stream_result = await thinking_handler.process_streaming_response(
+                stream=stream,
+                model_name=creds["model"],
+                collect_thinking=True,
+            )
+            
+            thoughts = stream_result["content"].strip()
+            
             # 更新到数据库
             await db_manager.update_personality_state(group_id, thoughts=thoughts)
             return thoughts
         except Exception as e:
-            logger.error(f"生成内心独白失败: {e}", exc_info=True)
+            error_msg = str(e)
+            logger.error(f"生成内心独白失败: {error_msg}", exc_info=True)
             return ""
 
     async def get_dynamic_identity(
@@ -234,21 +240,26 @@ class PersonalityManager:
                 text=schedule_prompt, model_alias=model_alias, max_output_tokens=1000
             )
 
-            stream = await client.chat.completions.create(
+            # 使用兼容性工具自动处理 response_format
+            stream = await openai_compat.create_with_auto_fallback(
+                client=client,
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
+                base_url=creds["base_url"],
+                use_response_format=True,
+                stream=True,
                 max_tokens=1000,
                 temperature=0.7,
-                response_format={"type": "json_object"},
-                stream=True,
             )
 
-            result = ""
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    result += chunk.choices[0].delta.content
-
-            result = result.strip()
+            # 使用思考模式处理器处理流式响应
+            stream_result = await thinking_handler.process_streaming_response(
+                stream=stream,
+                model_name=creds["model"],
+                collect_thinking=True,
+            )
+            
+            result = stream_result["content"].strip()
 
             # 解析 JSON 并处理各种可能的格式
             try:
@@ -293,8 +304,6 @@ class PersonalityManager:
             await db_manager.update_bot_schedule(group_id, today, valid_schedule)
 
             # 日志输出，方便调试
-            from nonebot import logger
-
             logger.info(f"成功为群 {group_id} 生成作息表：")
             for item in valid_schedule:
                 status = "✅可水群" if item.get("can_chat") else "💤不水群"
@@ -302,7 +311,8 @@ class PersonalityManager:
 
             return valid_schedule
         except Exception as e:
-            logger.error(f"生成每日作息表失败: {e}", exc_info=True)
+            error_msg = str(e)
+            logger.error(f"生成每日作息表失败: {error_msg}", exc_info=True)
             return []
 
     async def capture_style_patterns(self, group_id: int, history: List[str]):
@@ -343,21 +353,26 @@ class PersonalityManager:
                 text=mimicry_prompt, model_alias=model_alias, max_output_tokens=500
             )
 
-            stream = await client.chat.completions.create(
+            # 使用兼容性工具自动处理 response_format
+            stream = await openai_compat.create_with_auto_fallback(
+                client=client,
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
+                base_url=creds["base_url"],
+                use_response_format=True,
+                stream=True,
                 max_tokens=500,
                 temperature=0.3,
-                response_format={"type": "json_object"},
-                stream=True,
             )
 
-            result = ""
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    result += chunk.choices[0].delta.content
-
-            result = result.strip()
+            # 使用思考模式处理器处理流式响应
+            stream_result = await thinking_handler.process_streaming_response(
+                stream=stream,
+                model_name=creds["model"],
+                collect_thinking=True,
+            )
+            
+            result = stream_result["content"].strip()
 
             try:
                 cleaned_result = extract_json_from_markdown(result)
@@ -383,7 +398,8 @@ class PersonalityManager:
                             await db_manager.add_style_pattern(group_id, context, style)
 
         except Exception as e:
-            logger.error(f"风格捕捉失败: {e}", exc_info=True)
+            error_msg = str(e)
+            logger.error(f"风格捕捉失败: {error_msg}", exc_info=True)
 
     async def mine_slang(self, group_id: int, history: List[str]):
         """
@@ -452,21 +468,26 @@ class PersonalityManager:
                 text=mining_prompt, model_alias=model_alias, max_output_tokens=500
             )
 
-            stream = await client.chat.completions.create(
+            # 使用兼容性工具自动处理 response_format
+            stream = await openai_compat.create_with_auto_fallback(
+                client=client,
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
+                base_url=creds["base_url"],
+                use_response_format=True,
+                stream=True,
                 max_tokens=500,
                 temperature=0.3,
-                response_format={"type": "json_object"},
-                stream=True,
             )
 
-            result = ""
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    result += chunk.choices[0].delta.content
-
-            result = result.strip()
+            # 使用思考模式处理器处理流式响应
+            stream_result = await thinking_handler.process_streaming_response(
+                stream=stream,
+                model_name=creds["model"],
+                collect_thinking=True,
+            )
+            
+            result = stream_result["content"].strip()
 
             try:
                 cleaned_result = extract_json_from_markdown(result)
@@ -503,7 +524,8 @@ class PersonalityManager:
                             await self._refine_slang_definition(group_id, phrase)
 
         except Exception as e:
-            logger.error(f"黑话挖掘失败: {e}", exc_info=True)
+            error_msg = str(e)
+            logger.error(f"黑话挖掘失败: {error_msg}", exc_info=True)
 
     def _is_valid_slang_candidate(self, phrase: str, definition: str, context: str) -> bool:
         """
@@ -594,12 +616,14 @@ class PersonalityManager:
                 stream=True,
             )
 
-            final_def = ""
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    final_def += chunk.choices[0].delta.content
-
-            final_def = final_def.strip()
+            # 使用思考模式处理器处理流式响应
+            stream_result = await thinking_handler.process_streaming_response(
+                stream=stream,
+                model_name=creds["model"],
+                collect_thinking=True,
+            )
+            
+            final_def = stream_result["content"].strip()
             await db_manager.update_slang_candidate(
                 group_id, phrase, delta_freq=0, stage=new_stage, definition=final_def
             )
@@ -683,21 +707,26 @@ class PersonalityManager:
                 text=vibe_prompt, model_alias=model_alias, max_output_tokens=300
             )
 
-            stream = await client.chat.completions.create(
+            # 使用兼容性工具自动处理 response_format
+            stream = await openai_compat.create_with_auto_fallback(
+                client=client,
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
+                base_url=creds["base_url"],
+                use_response_format=True,
+                stream=True,
                 max_tokens=300,
                 temperature=0.5,
-                response_format={"type": "json_object"},
-                stream=True,
             )
 
-            vibe_json = ""
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    vibe_json += chunk.choices[0].delta.content
-
-            vibe_json = vibe_json.strip()
+            # 使用思考模式处理器处理流式响应
+            stream_result = await thinking_handler.process_streaming_response(
+                stream=stream,
+                model_name=creds["model"],
+                collect_thinking=True,
+            )
+            
+            vibe_json = stream_result["content"].strip()
 
             # 验证并规范化 JSON 格式
             try:
@@ -720,7 +749,8 @@ class PersonalityManager:
                 )
 
         except Exception as e:
-            logger.error(f"更新群聊氛围失败: {e}", exc_info=True)
+            error_msg = str(e)
+            logger.error(f"更新群聊氛围失败: {error_msg}", exc_info=True)
 
 
 personality_manager = PersonalityManager()

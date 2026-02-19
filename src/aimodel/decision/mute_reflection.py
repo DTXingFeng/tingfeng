@@ -8,6 +8,7 @@ from src.config.ai_config import ai_config, ai_config_manager
 from src.config.config import bot_config
 from src.utils.db_manager import db_manager
 from src.utils.logger import get_logger
+from src.utils.thinking_mode import thinking_handler
 
 logger = get_logger(__name__)
 
@@ -108,7 +109,12 @@ async def reflect_on_mute(
             max_tokens=800,
         )
 
-        result_text = response.choices[0].message.content.strip()
+        # 使用思考模式处理器处理响应
+        response_result = thinking_handler.process_non_streaming_response(response)
+        result_text = response_result["content"]
+        
+        if response_result["has_thinking"]:
+            logger.info(f"禁言反思使用思考模式: 推理长度={len(response_result['thinking'])}")
 
         import json
         import re
@@ -277,7 +283,9 @@ async def generate_mute_response(group_id: int, reflection_data: dict[str, Any])
             max_tokens=100,
         )
 
-        result_text = response.choices[0].message.content.strip()
+        # 使用思考模式处理器处理响应
+        response_result = thinking_handler.process_non_streaming_response(response)
+        result_text = response_result["content"]
 
         import re
 

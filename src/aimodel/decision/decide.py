@@ -7,6 +7,8 @@ from src.aimodel.memory.vector_db import vector_db
 from src.utils.context_manager import context_manager
 from src.utils.logger import get_logger
 from src.utils.error_handler import handle_errors, APIError
+from src.utils.openai_compat import openai_compat
+from src.utils.thinking_mode import thinking_handler
 from src.mcp.registry import tool_registry
 from typing import Optional
 import json
@@ -228,42 +230,57 @@ async def should_i_reply(
                 f"[上下文管理] 决策模型: {model_alias}, 使用tokens: {prompt_tokens}/{context_manager.get_model_max_tokens(model_alias)}"
             )
 
-        # 构建请求参数
-        request_params = {
+        # 获取 MCP 工具定义
+        mcp_tools = tool_registry.get_all_definitions()
+
+        # 构建基础请求参数
+        base_params = {
             "model": creds["model"],
             "messages": [{"role": "user", "content": optimized_prompt}],
-            "response_format": {"type": "json_object"},
             "stream": True,
         }
 
-        # 如果有 MCP 工具可用，添加工具支持
+        # 如果有 MCP 工具可用，添加工具支持（工具调用时不使用 response_format）
         if mcp_tools:
-            request_params["tools"] = mcp_tools
-            request_params["tool_choice"] = "auto"
-            # 移除 response_format，因为工具调用与 JSON 格式不兼容
-            del request_params["response_format"]
+            base_params["tools"] = mcp_tools
+            base_params["tool_choice"] = "auto"
 
-        stream = await client.chat.completions.create(**request_params)
+        # 使用兼容性工具调用（自动处理 response_format）
+        stream = await openai_compat.create_with_auto_fallback(
+            client=client,
+            use_response_format=not bool(mcp_tools),  # 有工具时不使用 response_format
+            base_url=creds["base_url"],
+            **base_params
+        )
 
-        content = ""
-        tool_calls_buffer = {}  # 存储工具调用
-
-        async for chunk in stream:
-            # 收集文本内容
-            if chunk.choices and chunk.choices[0].delta.content:
-                content += chunk.choices[0].delta.content
-
-            # 收集工具调用
+        # 收集工具调用的字典
+        tool_calls_buffer = {}
+        
+        async def tool_chunk_callback(chunk):
+            """收集工具调用的回调函数"""
             if chunk.choices and chunk.choices[0].delta.tool_calls:
                 for tool_call in chunk.choices[0].delta.tool_calls:
                     idx = tool_call.index
                     if idx not in tool_calls_buffer:
                         tool_calls_buffer[idx] = {"id": tool_call.id, "name": "", "arguments": ""}
-
                     if tool_call.function and tool_call.function.name:
                         tool_calls_buffer[idx]["name"] = tool_call.function.name
                     if tool_call.function and tool_call.function.arguments:
                         tool_calls_buffer[idx]["arguments"] += tool_call.function.arguments
+
+        # 使用思考模式处理器处理流式响应
+        stream_result = await thinking_handler.process_streaming_response(
+            stream=stream,
+            model_name=creds["model"],
+            collect_thinking=True,
+            chunk_callback=tool_chunk_callback,
+        )
+        
+        content = stream_result["content"]
+        
+        # 记录思考模式状态
+        if stream_result["has_thinking"]:
+            logger.info(f"决策模型使用思考模式: 推理长度={len(stream_result['thinking'])}")
 
         # 如果有工具调用，执行并重新请求
         if tool_calls_buffer:
@@ -297,18 +314,24 @@ async def should_i_reply(
                 else:
                     logger.error(f"工具 {tool_name} 执行失败: {tool_result.get('error')}")
 
-            # 重新请求最终决策（不带工具）
-            stream = await client.chat.completions.create(
+            # 重新请求最终决策（不带工具，使用兼容性工具）
+            stream = await openai_compat.create_with_auto_fallback(
+                client=client,
                 model=creds["model"],
                 messages=[{"role": "user", "content": optimized_prompt}],
-                response_format={"type": "json_object"},
+                base_url=creds["base_url"],
+                use_response_format=True,
                 stream=True,
             )
 
-            content = ""
-            async for chunk in stream:
-                if chunk.choices and chunk.choices[0].delta.content:
-                    content += chunk.choices[0].delta.content
+            # 使用思考模式处理器处理
+            final_stream_result = await thinking_handler.process_streaming_response(
+                stream=stream,
+                model_name=creds["model"],
+                collect_thinking=True,
+            )
+            
+            content = final_stream_result["content"]
 
         content = content.strip()
         if "```json" in content:
@@ -360,7 +383,25 @@ async def should_i_reply(
 
     except json.JSONDecodeError as e:
         logger.error(f"决策结果JSON解析失败: {e}, 原始内容: {content}")
-        return {"should_reply": is_at_me, "mood_impact": 0}
+        return {
+            "should_reply": is_at_me,
+            "mood_impact": 0,
+            "target_message_index": 0,
+            "target_message_content": current_msg,
+            "selected_user": user_name,
+            "reply_to_user": user_name,
+            "interest_score": 0.0,
+            "is_replying_to_bot": False,
+        }
     except Exception as e:
-        logger.error(f"决策过程出错: {e}", exc_info=True)
-        return {"should_reply": is_at_me, "mood_impact": 0}
+        logger.error(f"决策过程出错: {type(e).__name__}: {str(e)}", exc_info=True)
+        return {
+            "should_reply": is_at_me,
+            "mood_impact": 0,
+            "target_message_index": 0,
+            "target_message_content": current_msg,
+            "selected_user": user_name,
+            "reply_to_user": user_name,
+            "interest_score": 0.0,
+            "is_replying_to_bot": False,
+        }

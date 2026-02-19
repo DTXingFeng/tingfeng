@@ -8,6 +8,7 @@ from src.utils.context_manager import context_manager
 from src.utils.logger import get_logger
 from src.utils.error_handler import handle_errors, retry_on_failure, DatabaseError
 from src.utils.performance_monitor import monitor_performance, ConcurrencyLimiter
+from src.utils.thinking_mode import thinking_handler
 from typing import List, Set
 
 logger = get_logger(__name__)
@@ -87,7 +88,13 @@ async def consolidate_memories(group_id: int):
                 model=creds["model"], messages=[{"role": "user", "content": optimized_prompt}], temperature=0.3
             )
 
-            output = response.choices[0].message.content.strip()
+            # 使用思考模式处理器处理响应
+            response_result = thinking_handler.process_non_streaming_response(response)
+            output = response_result["content"]
+            
+            if response_result["has_thinking"]:
+                logger.info(f"记忆固化使用思考模式: 推理长度={len(response_result['thinking'])}")
+            
             if output == "无" or not output:
                 await db_manager.mark_as_processed(msg_ids)
                 return

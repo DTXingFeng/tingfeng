@@ -5,6 +5,8 @@ from src.config.ai_config import ai_config, ai_config_manager
 from src.config.config import bot_config
 from src.utils.context_manager import context_manager
 from src.utils.db_manager import db_manager
+from src.utils.openai_compat import openai_compat
+from src.utils.thinking_mode import thinking_handler
 from nonebot import logger
 
 
@@ -68,15 +70,25 @@ async def dream_and_optimize(group_id: int):
             text=dream_prompt, model_alias=model_alias, max_output_tokens=1000
         )
 
-        response = await client.chat.completions.create(
+        # 使用兼容性工具自动处理 response_format
+        response = await openai_compat.create_with_auto_fallback(
+            client=client,
             model=creds["model"],
             messages=[{"role": "system", "content": optimized_prompt}],
+            base_url=creds["base_url"],
+            use_response_format=True,
+            stream=False,
             max_tokens=1000,
             temperature=0.4,
-            response_format={"type": "json_object"},
         )
 
-        result_text = response.choices[0].message.content.strip()
+        # 使用思考模式处理器处理响应
+        response_result = thinking_handler.process_non_streaming_response(response)
+        result_text = response_result["content"]
+        
+        if response_result["has_thinking"]:
+            logger.info(f"梦境代理使用思考模式: 推理长度={len(response_result['thinking'])}")
+        
         try:
             optimization_result = json.loads(result_text)
         except json.JSONDecodeError:

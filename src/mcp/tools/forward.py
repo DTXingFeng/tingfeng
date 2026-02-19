@@ -47,7 +47,7 @@ class GetForwardMessageTool(BaseTool):
 
             messages = []
             if isinstance(result, dict):
-                data = result.get("data", [])
+                data = result.get("data", result.get("messages", result.get("list", [])))
             elif isinstance(result, list):
                 data = result
             else:
@@ -59,7 +59,28 @@ class GetForwardMessageTool(BaseTool):
                 sender_id = sender_info.get("user_id", 0)
                 sender_card = sender_info.get("card", "")
 
-                content = msg.get("content", "")
+                # 尝试多种方式提取消息内容
+                content = msg.get("content", msg.get("raw_message", ""))
+                
+                # 如果 content 是列表（结构化消息），则提取文本
+                if isinstance(content, list):
+                    text_parts = []
+                    for seg in content:
+                        if seg.get("type") == "text":
+                            text_parts.append(seg.get("data", {}).get("text", ""))
+                    content = "".join(text_parts)
+                
+                # 如果还是空，尝试从 message 字段提取
+                if not content or content == "":
+                    message_list = msg.get("message", [])
+                    if isinstance(message_list, list):
+                        text_parts = []
+                        for seg in message_list:
+                            if seg.get("type") == "text":
+                                text_parts.append(seg.get("data", {}).get("text", ""))
+                        content = "".join(text_parts)
+                    else:
+                        content = str(message_list)
 
                 messages.append(
                     {
@@ -135,7 +156,7 @@ class ParseForwardMessageTool(BaseTool):
 
             messages = []
             if isinstance(result, dict):
-                data = result.get("data", [])
+                data = result.get("data", result.get("messages", result.get("list", [])))
             elif isinstance(result, list):
                 data = result
             else:
@@ -147,7 +168,28 @@ class ParseForwardMessageTool(BaseTool):
                 sender_id = sender_info.get("user_id", 0)
                 sender_card = sender_info.get("card", "")
 
-                content = msg.get("content", "")
+                # 尝试多种方式提取消息内容
+                content = msg.get("content", msg.get("raw_message", ""))
+                
+                # 如果 content 是列表（结构化消息），则提取文本
+                if isinstance(content, list):
+                    text_parts = []
+                    for seg in content:
+                        if seg.get("type") == "text":
+                            text_parts.append(seg.get("data", {}).get("text", ""))
+                    content = "".join(text_parts)
+                
+                # 如果还是空，尝试从 message 字段提取
+                if not content or content == "":
+                    message_list = msg.get("message", [])
+                    if isinstance(message_list, list):
+                        text_parts = []
+                        for seg in message_list:
+                            if seg.get("type") == "text":
+                                text_parts.append(seg.get("data", {}).get("text", ""))
+                        content = "".join(text_parts)
+                    else:
+                        content = str(message_list)
 
                 messages.append(
                     {
@@ -181,6 +223,10 @@ class FormatForwardMessagesTool(BaseTool):
             "type": "array",
             "description": "合并转发的消息列表（来自 get_forward_message）",
             "required": True,
+            "items": {
+                "type": "object",
+                "description": "单条消息对象",
+            },
         },
         "include_time": {"type": "boolean", "description": "是否包含时间信息", "required": False},
     }
