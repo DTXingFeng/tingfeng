@@ -259,9 +259,17 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                         deciding_groups.add(group_id)
 
                         try:
+                            # 判断是否包含表情包
+                            is_sticker_msg = len(ctx.get("stickers", [])) > 0
+
                             # 执行决策（注意：不在此时更新冷却时间，而是在回复完成后更新）
                             decision = await should_i_reply(
-                                group_id, ctx["display_name"], ctx["llm_text"], is_at_me=False, user_id=ctx["user_id"]
+                                group_id,
+                                ctx["display_name"],
+                                ctx["llm_text"],
+                                is_at_me=False,
+                                user_id=ctx["user_id"],
+                                is_sticker=is_sticker_msg,
                             )
 
                             # 更新心情
@@ -482,6 +490,9 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     do_reply = False
     target_user = display_name
 
+    # 判断是否包含表情包
+    is_sticker_msg = len(stickers) > 0
+
     if is_actively_engaged:
         # 1. 被显式叫到了，肯定要回
         # 更新强行唤醒时间，进入 5 分钟关注期
@@ -498,7 +509,9 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             deciding_groups.add(group_id)
             try:
                 # 执行决策评估心情（注意：不在此时更新冷却时间，而是在回复完成后更新）
-                decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=True, user_id=user_id)
+                decision = await should_i_reply(
+                    group_id, display_name, llm_text, is_at_me=True, user_id=user_id, is_sticker=is_sticker_msg
+                )
 
                 # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
                 mood_impact = decision.get("mood_impact", 0)
@@ -531,7 +544,9 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                     pending_decisions[group_id] = False
 
                     # 执行决策（注意：不在此时更新冷却时间，而是在回复完成后更新）
-                    decision = await should_i_reply(group_id, display_name, llm_text, is_at_me=False, user_id=user_id)
+                    decision = await should_i_reply(
+                        group_id, display_name, llm_text, is_at_me=False, user_id=user_id, is_sticker=is_sticker_msg
+                    )
 
                     # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
                     mood_impact = decision.get("mood_impact", 0)

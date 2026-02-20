@@ -18,11 +18,50 @@ logger = get_logger(__name__)
 
 
 async def should_i_reply(
-    group_id: int, user_name: str, current_msg: str, is_at_me: bool = False, user_id: Optional[int] = None
+    group_id: int,
+    user_name: str,
+    current_msg: str,
+    is_at_me: bool = False,
+    user_id: Optional[int] = None,
+    is_sticker: bool = False,
 ) -> dict:
     """
     判断机器人是否应该参与当前对话，并评价该对话对机器人心情的影响
+    
+    Args:
+        group_id: 群组 ID
+        user_name: 用户名称
+        current_msg: 当前消息内容
+        is_at_me: 是否艾特了机器人
+        user_id: 用户 ID（可选）
+        is_sticker: 是否是表情包消息
+        
+    Returns:
+        决策结果字典
     """
+    # -1. 惹人生厌检测（低优先级，只在未艾特时生效）
+    if not is_at_me:
+        # 检测 1: 当前心情值过低
+        current_mood_val = await db_manager.get_mood(group_id)
+        ANNOYANCE_MOOD_THRESHOLD = 30  # 心情值低于30分表示可能已惹人生厌
+        
+        if current_mood_val < ANNOYANCE_MOOD_THRESHOLD:
+            logger.info(
+                f"惹人生厌检测: 当前心情值过低 ({current_mood_val} < {ANNOYANCE_MOOD_THRESHOLD})，"
+                f"机器人可能已惹人生厌，保持沉默以让气氛缓和"
+            )
+            return {"should_reply": False, "mood_impact": 0}
+        
+        # 检测 2: 最近是否有明显的负面反馈
+        has_negative_feedback = await db_manager.has_recent_negative_feedback(group_id)
+        
+        if has_negative_feedback:
+            logger.info(
+                f"惹人生厌检测: 检测到最近的负面反馈（最近几次心情变化多为负面），"
+                f"机器人可能已惹人生厌，暂停主动发言以缓和气氛"
+            )
+            return {"should_reply": False, "mood_impact": 0}
+    
     # 0. 发言频率控制 - 只限制主动发言，被艾特时不限制
     if not is_at_me:
         recent_replies = await db_manager.get_recent_reply_count(group_id, minutes=10)
@@ -123,21 +162,64 @@ async def should_i_reply(
 
     # 4. 构造决策 Prompt
     max_idx = len(history) - 1  # 历史消息的最大索引
+
+    # 判断对话参与类型（用于更精确的决策）
+    conversation_type = "unknown"
+    if len(history) >= 3:
+        # 分析最近几条消息的参与者
+        recent_senders = [msg.split(":")[0] if ":" in msg else "unknown" for msg in history[-5:]]
+        unique_senders = len(set([s for s in recent_senders if s != bot_config.bot_name and s != "unknown"]))
+
+        if unique_senders <= 1:
+            conversation_type = "single_user"
+        elif unique_senders == 2:
+            conversation_type = "dual_chat"
+        else:
+            conversation_type = "group_chat"
+
+    # 检查最近的发言是否来自机器人自己
+    bot_recently_spoke = False
+    if len(history) > 0:
+        for msg in reversed(history[-3:]):
+            if msg.startswith(bot_config.bot_name + ":") or msg.startswith(f"{bot_config.bot_name}:"):
+                bot_recently_spoke = True
+                break
+
     prompt = (
         f"你现在是群聊机器人'{bot_config.bot_name}'的感性大脑，负责决策和情感评估。\n"
         f"你的角色设定是：{bot_config.identity}\n"
         f"你当前的内心状态：\n"
         f"- 心情值：{current_mood_val} (0-100)\n"
         f"- 性格特征：{json.dumps(traits, ensure_ascii=False)}\n"
-        f"- 最近的内心独白：{recent_thoughts}\n\n"
+        f"- 最近的内心独白：{recent_thoughts}\n"
+        f"- 对话类型：{conversation_type}\n"
+        f"- 你最近是否发言：{'是' if bot_recently_spoke else '否'}\n\n"
         "### 你的背景记忆：\n"
         f"{memory_str}\n"
         f"{slang_context}\n\n"
         "### 任务：\n"
         f"1. **理解上下文**：结合黑话库，深度解码当前对话的真实含义（注意识别谐音、缩写或游戏暗语）。\n"
-        f"2. **选择回复目标**：从历史消息中选择**一条**最值得回复的消息（不限于最新消息）。你可以回复历史记录中的任何一条消息，只要它值得回应。\n"
-        f"3. 判断'{bot_config.bot_name}'是否应该回复。\n"
-        f"4. 评估选定消息对'{bot_config.bot_name}'心情的影响。\n\n"
+        f"2. **对话场景识别**：判断当前对话属于哪种场景（A/B/C），这将决定你的回复策略。\n"
+        f"3. **选择回复目标**：从历史消息中选择**一条**最值得回复的消息（不限于最新消息）。你可以回复历史记录中的任何一条消息，只要它值得回应。\n"
+        f"4. 判断'{bot_config.bot_name}'是否应该回复。\n"
+        f"5. 评估选定消息对'{bot_config.bot_name}'心情的影响。\n\n"
+        "### 对话场景识别（新增核心判断）：\n"
+        "请首先判断当前对话属于以下哪种场景：\n"
+        "**场景 A：正在和 {bot_name} 对话**\n"
+        "  - 特征：历史消息中包含 {bot_name} 的发言，且当前消息是对 {bot_name} 的回应、接续、或反应\n"
+        "  - 关键词：回答你的问题、延续你的话题、提及你的发言、对你发表情做出反应\n"
+        "  - 判断方法：检查历史消息是否包含 {bot_name} 的发言，且当前消息与该发言有明确的逻辑关联\n"
+        "  - 回复策略：**强烈倾向于回复** (interest_score: 0.6-0.95)\n\n"
+        "**场景 B：提到了 {bot_name} 但不是在对话**\n"
+        "  - 特征：消息中提及 {bot_name} 的名字，但实际是在和其他人讨论关于 {bot_name} 的话题\n"
+        "  - 关键词：第三方讨论、评价 {bot_name}、在他人对话中顺带提到\n"
+        "  - 判断方法：{bot_name} 被作为话题对象，而非对话参与者\n"
+        "  - 回复策略：**谨慎考虑** (interest_score: 0.1-0.4)，除非话题与你高度相关或需要澄清，否则不插话\n\n"
+        "**场景 C：完全没和 {bot_name} 聊天**\n"
+        "  - 特征：{bot_name} 完全不在当前对话流中，是其他人在互相交流\n"
+        "  - 关键词：他人间的连续对话、快速来回、无关话题\n"
+        "  - 判断方法：检查对话流向，是「用户A↔用户B」的双人对话，且与你无关\n"
+        "  - 回复策略：**保持沉默** (interest_score: 0-0.2)，严禁插话\n\n"
         "### 判断准则：\n"
         "1. **核心原则 (Stay Silent - 沉默是金)**：\n"
         "   - 你是一个真实的人，而不是一个随时待命的 AI 助手。你不需要对群里发生的每一件事都发表评论。\n"
@@ -151,27 +233,32 @@ async def should_i_reply(
         "   - 如果最新消息不值得回复，但历史中有一条重要消息被忽略了，你可以选择回复那条旧消息。\n"
         "   - **历史消息格式**：每条消息前有索引号 `[0]`、`[1]`、`[2]` 等，你需要返回你选择的消息索引。\n"
         "3. **回复决策 (should_reply)** - 请严格执行以下标准：\n"
-        "   - **对话流向分析（核心）**：\n"
-        "     * 首先判断历史消息的对话流向：是「用户A↔用户B」的双人对话，还是「用户↔你」的对话，还是「多人群聊」。\n"
-        "     * 如果是「用户A↔用户B」的连续对话（如：用户A问→用户B答→用户A追问），且内容与你无关，**严禁插话**，这是他们的私人对话空间。\n"
-        "     * 如果是「用户A→用户B→用户A」的快速来回，即使中间偶尔有人提到'你'或'它'，那也是他们在互相指代，不是在叫你。\n"
+        "   - **对话场景优先**：首先判断属于上述哪种场景（A/B/C），这是最核心的判断依据。\n"
+        "   - **场景 A（正在和你对话）**：强烈倾向于回复，即使没有艾特你。\n"
+        "   - **场景 B（提到但未对话）**：谨慎评估，只有当话题高度相关或需要回应时才回复。\n"
+        "   - **场景 C（完全无关）**：严格保持沉默，不插话。\n"
+        "   - **对话流向分析（辅助验证）**：\n"
+        "     * 追踪最近的对话流向：检查历史消息的发言者顺序和内容关联性。\n"
+        "     * 如果是「用户A→用户B→用户A」的快速来回，即使中间偶尔提到类似'你'的代词，那也是他们在互相指代，不是在叫你。\n"
         "     * 只有当对话明显与你的话题、你的发言、或你的记忆相关时，才考虑参与。\n"
-        "   - **上下文关联性优先**：仔细检查历史消息，如果上一条或最近几条消息是你（self）发送的，而当前消息是自然的对话延续（如回答你的问题、接续你的话题、对你的话做出反应），则强烈建议回复，即使没有艾特你。\n"
+        "   - **上下文关联性验证**：\n"
+        "     * 仔细检查历史消息，如果上一条或最近几条消息是你（self）发送的，而当前消息是自然的对话延续（如回答你的问题、接续你的话题、对你的话做出反应），则归类为「场景 A」。\n"
+        "     * 如果历史消息中没有你的发言，且当前消息只是顺带提到你的名字，归类为「场景 B」。\n"
+        "     * 如果历史消息中完全没有你的痕迹，归类为「场景 C」。\n"
         "   - **指代消歧（关键）**：\n"
         "     * 历史消息中的「你」、「它」、「这个东西」等代词，需要仔细判断指代对象。\n"
         "     * 例如：「用户A: 你觉得呢？用户B: 还行吧」→ 这里的「你」指用户A在问用户B，不是在问你（{bot_config.bot_name}）。\n"
         "     * 只有当上下文明确显示话题与你相关、或者上一条消息是你发的、或者明确提到你的名字时，代词才可能指你。\n"
-        "   - 如果 is_at_me 为 true，通常应该回复，除非对方在明显刷屏、辱骂或无理取闹。\n"
+        "   - 如果 is_at_me 为 true，通常归类为「场景 A」，除非对方在明显刷屏、辱骂或无理取闹。\n"
         "   - **关于图片**：除非图片内容直接提及你、或者是你记忆中的重要物品/场景，否则不要随意'点评'别人的图片。人类发图通常是在互相交流，你作为一个幽灵，随意插话点评图片会显得非常唐突且'AI 味'十足。\n"
         "   - **适度参与**：即使没有相关记忆，如果话题轻松有趣（如梗图、游戏、搞笑内容、日常闲聊），也可以适度参与，给出简短的反应。\n"
         "   - **记忆驱动**：当话题与你的背景记忆（长期记忆、用户往事）有高度重合时，应优先考虑回复。\n"
         "   - **无聊话题直接跳过**：普通的日常寒暄、问候、没有实质内容的闲聊，直接判定为不回复。\n"
-        "4. **兴趣评分 (interest_score)** - 严格标准：\n"
-        "   - 评估你对选定话题的'参与必要性'。0 代表完全不感兴趣/无关，1 代表必须立刻加入对话。\n"
-        "   - **上下文关联**：如果这是对你上一句话的回应或接续，兴趣评分至少应为 0.5-0.7。\n"
-        "   - 有趣的梗图、游戏话题、搞笑内容、轻松的日常闲聊：**只给 0.15-0.35 的评分**（降低了原来的 0.25-0.5）。\n"
-        "   - **只有与记忆强相关、对你非常重要、或直接艾特你的话题才给 0.75 以上的高分**。\n"
-        "   - 普通话题的兴趣评分不应超过 0.5。\n"
+        "4. **兴趣评分 (interest_score)** - 按场景分级：\n"
+        "   - **场景 A（正在和你对话）**：0.5-0.95（这是你的对话，应该积极参与）\n"
+        "   - **场景 B（提到但未对话）**：0.1-0.4（谨慎评估，除非必须回应）\n"
+        "   - **场景 C（完全无关）**：0.0-0.2（几乎不回复）\n"
+        "   - 特殊情况：直接艾特你且内容合理 → 0.8-1.0\n"
         "5. **心情评估 (mood_impact)**：\n"
         f"   - **核心原则**：你是一个有一定心理承受能力的真实少女，不要因为一点琐事就心情不好。只有明确针对你、且带有恶意或严重冒犯的言论才需要扣分。\n"
         f"   - 别人夸奖、关心、聊愉快的话题：+1 到 +3。\n"
@@ -201,7 +288,8 @@ async def should_i_reply(
         f"   - 仔细观察消息的发送者和接收者关系，判断对话是在用户之间进行，还是用户与你之间进行。\n"
         f"   - 如果发现是「用户A↔用户B」的双人对话流程，且不涉及你，**严禁插话**。\n\n"
         f"当前消息：{user_name}: {current_msg}\n"
-        f"是否艾特你：{is_at_me}\n\n"
+        f"是否艾特你：{is_at_me}\n"
+        f"是否表情包：{is_sticker}\n\n"
         "### 输出要求：\n"
         "请直接输出 JSON 格式：\n"
         "{\n"
@@ -211,7 +299,8 @@ async def should_i_reply(
         f'  "mood_impact": number (-10 到 10 之间的整数),\n'
         f'  "reason": "简短的理由（说明为什么选择这条消息）",\n'
         f'  "is_replying_to_bot": boolean,\n'
-        f'  "interest_score": number (0-1)\n'
+        f'  "interest_score": number (0-1),\n'
+        f'  "conversation_scene": "A/B/C (场景识别：A=正在和bot对话, B=提到bot但未对话, C=完全没和bot聊天)"\n'
         f"}}"
     )
 
@@ -365,9 +454,19 @@ async def should_i_reply(
         mood_impact = decision.get("mood_impact", 0)
         interest_score = decision.get("interest_score", 0)
         is_replying_to_bot = decision.get("is_replying_to_bot", False)
+        conversation_scene = decision.get("conversation_scene", "C")  # 默认为场景C（未对话）
+
+        # 场景描述映射
+        scene_descriptions = {
+            "A": "正在和bot对话",
+            "B": "提到bot但未对话",
+            "C": "完全没和bot聊天",
+            "unknown": "未知场景",
+        }
+        scene_desc = scene_descriptions.get(conversation_scene, "未知场景")
 
         print(
-            f"决策引擎: [回复:{should_reply}] [目标消息:{target_message_index}] [对象:{reply_to_user}] [内容:{target_message_content[:30]}...] [兴趣:{interest_score}] [心情:{mood_impact:+}] [理由:{decision.get('reason')}]"
+            f"决策引擎: [场景:{conversation_scene}({scene_desc})] [回复:{should_reply}] [目标消息:{target_message_index}] [对象:{reply_to_user}] [内容:{target_message_content[:30]}...] [兴趣:{interest_score}] [心情:{mood_impact:+}] [理由:{decision.get('reason')}]"
         )
 
         return {

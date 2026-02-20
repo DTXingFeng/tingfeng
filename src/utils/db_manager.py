@@ -437,6 +437,59 @@ class DBManager:
             await cursor.execute("SELECT group_id, mood_value FROM bot_moods")
             return await cursor.fetchall()
 
+    async def get_recent_mood_changes(
+        self, group_id: int, count: int = 10
+    ) -> List[Dict[str, any]]:
+        """
+        获取最近的心情变化记录
+        
+        Args:
+            group_id: 群组ID
+            count: 获取记录数量
+            
+        Returns:
+            心情变化记录列表，包含 mood_delta 和 timestamp
+        """
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT mood_delta, timestamp FROM mood_history 
+                WHERE group_id = ? 
+                ORDER BY timestamp DESC 
+                LIMIT ?
+                """,
+                (group_id, count),
+            )
+            rows = await cursor.fetchall()
+            return [
+                {"mood_delta": row[0], "timestamp": row[1]} for row in rows
+            ] if rows else []
+
+    async def has_recent_negative_feedback(
+        self, group_id: int, threshold: int = -5, recent_count: int = 5
+    ) -> bool:
+        """
+        检测最近是否有明显的负面反馈
+        
+        Args:
+            group_id: 群组ID
+            threshold: 负面阈值（默认-5，即单次影响超过-5分视为负面）
+            recent_count: 检查最近的N条记录
+            
+        Returns:
+            True 表示最近有负面反馈，False 表示没有
+        """
+        changes = await self.get_recent_mood_changes(group_id, count=recent_count)
+        
+        # 检查是否有超过阈值的负面记录
+        negative_count = sum(1 for change in changes if change["mood_delta"] < threshold)
+        
+        # 如果最近N条记录中有超过1/3是负面，或者有一次严重负面（<-10），返回True
+        severe_negative = any(change["mood_delta"] < -10 for change in changes)
+        
+        return severe_negative or negative_count >= (recent_count // 3)
+
     async def update_mood(self, group_id: int, delta: int) -> int:
         """更新心情值 (增加或减少)"""
         current_mood = await self.get_mood(group_id)
