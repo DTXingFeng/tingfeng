@@ -85,10 +85,10 @@ async def dream_and_optimize(group_id: int):
         # 使用思考模式处理器处理响应
         response_result = thinking_handler.process_non_streaming_response(response)
         result_text = response_result["content"]
-        
+
         if response_result["has_thinking"]:
             logger.info(f"梦境代理使用思考模式: 推理长度={len(response_result['thinking'])}")
-        
+
         try:
             optimization_result = json.loads(result_text)
         except json.JSONDecodeError:

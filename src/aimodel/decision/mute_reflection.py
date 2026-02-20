@@ -112,7 +112,7 @@ async def reflect_on_mute(
         # 使用思考模式处理器处理响应
         response_result = thinking_handler.process_non_streaming_response(response)
         result_text = response_result["content"]
-        
+
         if response_result["has_thinking"]:
             logger.info(f"禁言反思使用思考模式: 推理长度={len(response_result['thinking'])}")
 

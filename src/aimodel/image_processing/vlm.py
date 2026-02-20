@@ -152,9 +152,10 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
         # 使用思考模式处理器处理响应
         response_result = thinking_handler.process_non_streaming_response(response)
         result = response_result["content"].strip()
-        
+
         if response_result["has_thinking"]:
             from src.utils.logger import get_logger
+
             logger = get_logger(__name__)
             logger.info(f"图像识别使用思考模式: 推理长度={len(response_result['thinking'])}")
 

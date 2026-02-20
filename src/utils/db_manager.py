@@ -103,6 +103,17 @@ class DBManager:
 
                 await cursor.execute(
                     """
+                    CREATE TABLE IF NOT EXISTS mood_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        group_id INTEGER,
+                        mood_delta INTEGER,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """
+                )
+
+                await cursor.execute(
+                    """
                     CREATE TABLE IF NOT EXISTS bot_personality (
                         group_id INTEGER PRIMARY KEY,
                         traits TEXT,
@@ -245,6 +256,9 @@ class DBManager:
                 )
                 await cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_mute_reflections_group_time ON mute_reflections(group_id, timestamp DESC)"
+                )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_mood_history_group_time ON mood_history(group_id, timestamp DESC)"
                 )
 
                 await conn.commit()
@@ -437,16 +451,14 @@ class DBManager:
             await cursor.execute("SELECT group_id, mood_value FROM bot_moods")
             return await cursor.fetchall()
 
-    async def get_recent_mood_changes(
-        self, group_id: int, count: int = 10
-    ) -> List[Dict[str, any]]:
+    async def get_recent_mood_changes(self, group_id: int, count: int = 10) -> List[Dict[str, any]]:
         """
         获取最近的心情变化记录
-        
+
         Args:
             group_id: 群组ID
             count: 获取记录数量
-            
+
         Returns:
             心情变化记录列表，包含 mood_delta 和 timestamp
         """
@@ -462,32 +474,28 @@ class DBManager:
                 (group_id, count),
             )
             rows = await cursor.fetchall()
-            return [
-                {"mood_delta": row[0], "timestamp": row[1]} for row in rows
-            ] if rows else []
+            return [{"mood_delta": row[0], "timestamp": row[1]} for row in rows] if rows else []
 
-    async def has_recent_negative_feedback(
-        self, group_id: int, threshold: int = -5, recent_count: int = 5
-    ) -> bool:
+    async def has_recent_negative_feedback(self, group_id: int, threshold: int = -5, recent_count: int = 5) -> bool:
         """
         检测最近是否有明显的负面反馈
-        
+
         Args:
             group_id: 群组ID
             threshold: 负面阈值（默认-5，即单次影响超过-5分视为负面）
             recent_count: 检查最近的N条记录
-            
+
         Returns:
             True 表示最近有负面反馈，False 表示没有
         """
         changes = await self.get_recent_mood_changes(group_id, count=recent_count)
-        
+
         # 检查是否有超过阈值的负面记录
         negative_count = sum(1 for change in changes if change["mood_delta"] < threshold)
-        
+
         # 如果最近N条记录中有超过1/3是负面，或者有一次严重负面（<-10），返回True
         severe_negative = any(change["mood_delta"] < -10 for change in changes)
-        
+
         return severe_negative or negative_count >= (recent_count // 3)
 
     async def update_mood(self, group_id: int, delta: int) -> int:
@@ -502,6 +510,13 @@ class DBManager:
                 WHERE group_id = ?
             """,
                 (new_mood, group_id),
+            )
+            await cursor.execute(
+                """
+                INSERT INTO mood_history (group_id, mood_delta)
+                VALUES (?, ?)
+                """,
+                (group_id, delta),
             )
             await conn.commit()
         return new_mood

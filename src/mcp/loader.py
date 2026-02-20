@@ -10,6 +10,7 @@ from src.mcp.tools.utility import GetCurrentTimeTool, IsWithinScheduleTool, Form
 from src.mcp.tools.message import GetRecentMessagesTool, GetMessageContextTool
 from src.mcp.tools.system import GetSystemResourceTool, GetNetworkInfoTool, GetBootTimeTool, GetRaspberryPiInfoTool
 from src.mcp.tools.forward import GetForwardMessageTool, ParseForwardMessageTool, FormatForwardMessagesTool
+from src.mcp.tools.web_search import WebSearchTool
 from src.mcp.registry import tool_registry
 from src.utils.logger import get_logger
 
@@ -61,6 +62,9 @@ def load_all_tools():
     tool_registry.register(ParseForwardMessageTool())
     tool_registry.register(FormatForwardMessagesTool())
 
+    # 网络搜索工具
+    tool_registry.register(WebSearchTool())
+
     logger.info(f"MCP 工具加载完成！共注册 {len(tool_registry.list_tools())} 个工具")
 
     # 输出已注册的工具列表
@@ -86,6 +90,7 @@ def get_tools_summary() -> dict:
         "message": [],
         "system": [],
         "forward": [],
+        "web": [],
     }
 
     for tool_name in tools:
@@ -109,6 +114,8 @@ def get_tools_summary() -> dict:
             summary["system"].append(tool_name)
         elif tool_name.startswith("get_") and "message" in tool_name or tool_name.startswith("message"):
             summary["message"].append(tool_name)
+        elif tool_name.startswith("web") or "search" in tool_name:
+            summary["web"].append(tool_name)
         else:
             summary["utility"].append(tool_name)
 
@@ -143,6 +150,9 @@ if __name__ == "__main__":
             print(f"  - {t}")
         print(f"\n合并转发工具 ({len(summary['forward'])}):")
         for t in summary["forward"]:
+            print(f"  - {t}")
+        print(f"\n网络搜索工具 ({len(summary['web'])}):")
+        for t in summary["web"]:
             print(f"  - {t}")
 
         print("\n测试工具调用...")

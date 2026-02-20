@@ -133,9 +133,9 @@ class PersonalityManager:
                 model_name=creds["model"],
                 collect_thinking=True,
             )
-            
+
             thoughts = stream_result["content"].strip()
-            
+
             # 更新到数据库
             await db_manager.update_personality_state(group_id, thoughts=thoughts)
             return thoughts
@@ -258,7 +258,7 @@ class PersonalityManager:
                 model_name=creds["model"],
                 collect_thinking=True,
             )
-            
+
             result = stream_result["content"].strip()
 
             # 解析 JSON 并处理各种可能的格式
@@ -371,7 +371,7 @@ class PersonalityManager:
                 model_name=creds["model"],
                 collect_thinking=True,
             )
-            
+
             result = stream_result["content"].strip()
 
             try:
@@ -421,38 +421,49 @@ class PersonalityManager:
 你现在是 {bot_config.bot_name} 的黑话挖掘模块。请从以下对话中识别群内特有黑话、梗、游戏暗语。
 
 ### 严格筛选标准（必须同时满足）：
-1. **明确性**：该词汇在普通语境下含义不明，但在群内被频繁使用
-2. **重复性**：在当前对话中至少出现 2 次以上，或者从上下文能推断是常用表达
-3. **独特性**：不是普通网络用语，而是该群特有的默契表达
-4. **可解释性**：能够根据上下文给出明确、具体的定义
+1. **高频使用**：在当前对话中至少出现 3 次以上，或者从上下文能推断是长期高频使用的表达
+2. **含义明确**：能够根据上下文给出非常明确、具体的定义，不能有模糊或歧义
+3. **群特有性**：不是通用网络用语，而是该群特有的默契表达或小圈子用语
+4. **稳定性**：不是临时性的口误或一时兴起的表达，而是已经固化的表达方式
 
 ### 只挖掘以下类型：
-- 明显的谐音梗（如"依托构思" = "一坨狗屎"）
-- 躲避审查的中文缩写（如"hso" = "好色哦"）
-- 游戏圈特定的术语/缩写（如"DRG" = "深岩银河"）
-- 群友约定俗成的暗语
-- 为了绕过检测而使用的变体
+- 明显的谐音梗（如"依托构思" = "一坨狗屎"、"完犊子" = "完了"）
+- 躲避审查的拼音缩写（如"hso" = "好色哦"、"dd" = "滴滴"）
+- 游戏圈特定的术语/缩写（如"DRG" = "深岩银河"、"LOL" = "英雄联盟"）
+- 群友长期约定俗成的暗语
+- 为了绕过关键词检测而使用的变体
+- 特定社群的文化符号
 
-### 严禁挖掘：
-- 偶尔出现的普通词汇
+### 严禁挖掘（重要）：
+- 偶尔出现（1-2次）的普通词汇
 - 模糊不清、无法确定含义的表达
-- 网络上通用的流行语（如"绝绝子"、"yyds"等）
-- 明显的个人打字错误
-- 没有上下文支持的猜测
+- 网络上通用的流行语（如"绝绝子"、"yyds"、"emo"等）
+- 明显的个人打字错误（如"吗"写成"马"）
+- 语气词、助词（如"捏"、"的说"、"呀"等应归类为句式，不是黑话）
+- 常见网络缩写（如"awsl"、"hhh"、"xswl"等）
+- 没有足够上下文支持的猜测
+- 个人昵称或专有名词
 
 ### 判定流程：
-对于每个候选词，问自己三个问题：
-1. 它在当前对话中是否至少出现 2 次？否 → 忽略
-2. 它的含义是否明确可确定？否 → 忽略
-3. 它是该群特有的表达吗？否 → 忽略
+对于每个候选词，严格问自己四个问题：
+1. 它在当前对话中是否至少出现 3 次？否 → 忽略
+2. 它的含义是否100%明确可确定？否 → 忽略
+3. 它是该群特有的小圈子表达吗？否 → 忽略
+4. 它是否已经固化为稳定表达？否 → 忽略
 
-只有三个问题都回答"是"，才认定为黑话。
+只有四个问题都回答"是"，才认定为黑话。
 
-### 示例输出（高质量黑话）：
+### 质量检验标准：
+- 定义必须具体（至少15字）
+- 定义不能包含"可能"、"或许"、"应该"等模糊词
+- 候选词长度必须在2-8字之间
+- 必须能在对话中找到该词的实际使用
+
+### 示例输出（仅高质量黑话）：
 [
-  {{"phrase": "爆金币", "definition": "指让某人出钱或付出代价，带有某种解构色彩"}},
-  {{"phrase": "依托构思", "definition": "谐音'一坨狗屎'，用于吐槽质量极差的东西"}},
-  {{"phrase": "DRG", "definition": "游戏《深岩银河》的缩写"}}
+  {{"phrase": "爆金币", "definition": "指让某人出钱或付出代价，带有某种解构色彩，常用于调侃消费行为"}},
+  {{"phrase": "依托构思", "definition": "谐音'一坨狗屎'，用于吐槽质量极差的东西或荒谬的情况"}},
+  {{"phrase": "DRG", "definition": "游戏《深岩银河》（Deep Rock Galactic）的缩写，群友常讨论的游戏"}}
 ]
 
 ### 待分析对话：
@@ -461,7 +472,8 @@ class PersonalityManager:
 ### 输出要求：
 - 只输出 JSON 数组，没有匹配则输出空数组 []
 - 宁缺毋滥，宁可漏掉也不要误判
-- 确保每个定义都具体、准确
+- 确保每个定义都具体、准确、无歧义
+- 优先保证质量而非数量
 """
         try:
             optimized_prompt, prompt_tokens = context_manager.truncate_text(
@@ -486,7 +498,7 @@ class PersonalityManager:
                 model_name=creds["model"],
                 collect_thinking=True,
             )
-            
+
             result = stream_result["content"].strip()
 
             try:
@@ -535,17 +547,17 @@ class PersonalityManager:
         if len(phrase) < 2 or len(phrase) > 8:
             return False
 
-        # 2. 检查定义是否过于模糊
-        uncertain_keywords = ["可能", "或许", "应该", "需要结合", "具体含义", "未知", "不清楚", "猜测"]
+        # 2. 检查定义是否过于模糊（严格检查）
+        uncertain_keywords = ["可能", "或许", "应该", "需要结合", "具体含义", "未知", "不清楚", "猜测", "大概"]
         if any(keyword in definition for keyword in uncertain_keywords):
             return False
 
-        # 3. 检查定义是否过于简短（少于10字说明不具体）
-        if len(definition) < 10:
+        # 3. 检查定义是否过于简短（至少15字）
+        if len(definition) < 15:
             return False
 
         # 4. 检查定义是否只是重复候选词（如"指这个词"）
-        if phrase in definition and len(definition) < len(phrase) * 2:
+        if phrase in definition and len(definition) < len(phrase) * 3:
             return False
 
         # 5. 检查候选词是否在上下文中实际出现
@@ -555,6 +567,11 @@ class PersonalityManager:
         # 6. 检查候选词是否过于常见（避免记录普通词汇）
         common_words = ["的", "了", "是", "在", "有", "不", "和", "我", "你", "他", "这", "那", "好", "坏", "大", "小"]
         if phrase in common_words:
+            return False
+
+        # 7. 过滤常见的网络用语和语气词
+        common_slang = ["awsl", "hhh", "xswl", "yyds", "绝绝子", "emo", "捏", "的说", "呀", "嘛", "呢"]
+        if phrase.lower() in common_slang:
             return False
 
         return True
@@ -622,7 +639,7 @@ class PersonalityManager:
                 model_name=creds["model"],
                 collect_thinking=True,
             )
-            
+
             final_def = stream_result["content"].strip()
             await db_manager.update_slang_candidate(
                 group_id, phrase, delta_freq=0, stage=new_stage, definition=final_def
@@ -725,7 +742,7 @@ class PersonalityManager:
                 model_name=creds["model"],
                 collect_thinking=True,
             )
-            
+
             vibe_json = stream_result["content"].strip()
 
             # 验证并规范化 JSON 格式

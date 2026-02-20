@@ -27,7 +27,7 @@ async def should_i_reply(
 ) -> dict:
     """
     判断机器人是否应该参与当前对话，并评价该对话对机器人心情的影响
-    
+
     Args:
         group_id: 群组 ID
         user_name: 用户名称
@@ -35,7 +35,7 @@ async def should_i_reply(
         is_at_me: 是否艾特了机器人
         user_id: 用户 ID（可选）
         is_sticker: 是否是表情包消息
-        
+
     Returns:
         决策结果字典
     """
@@ -44,24 +44,24 @@ async def should_i_reply(
         # 检测 1: 当前心情值过低
         current_mood_val = await db_manager.get_mood(group_id)
         ANNOYANCE_MOOD_THRESHOLD = 30  # 心情值低于30分表示可能已惹人生厌
-        
+
         if current_mood_val < ANNOYANCE_MOOD_THRESHOLD:
             logger.info(
                 f"惹人生厌检测: 当前心情值过低 ({current_mood_val} < {ANNOYANCE_MOOD_THRESHOLD})，"
                 f"机器人可能已惹人生厌，保持沉默以让气氛缓和"
             )
             return {"should_reply": False, "mood_impact": 0}
-        
+
         # 检测 2: 最近是否有明显的负面反馈
         has_negative_feedback = await db_manager.has_recent_negative_feedback(group_id)
-        
+
         if has_negative_feedback:
             logger.info(
                 f"惹人生厌检测: 检测到最近的负面反馈（最近几次心情变化多为负面），"
                 f"机器人可能已惹人生厌，暂停主动发言以缓和气氛"
             )
             return {"should_reply": False, "mood_impact": 0}
-    
+
     # 0. 发言频率控制 - 只限制主动发言，被艾特时不限制
     if not is_at_me:
         recent_replies = await db_manager.get_recent_reply_count(group_id, minutes=10)

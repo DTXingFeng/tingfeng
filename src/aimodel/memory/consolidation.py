@@ -91,10 +91,10 @@ async def consolidate_memories(group_id: int):
             # 使用思考模式处理器处理响应
             response_result = thinking_handler.process_non_streaming_response(response)
             output = response_result["content"]
-            
+
             if response_result["has_thinking"]:
                 logger.info(f"记忆固化使用思考模式: 推理长度={len(response_result['thinking'])}")
-            
+
             if output == "无" or not output:
                 await db_manager.mark_as_processed(msg_ids)
                 return

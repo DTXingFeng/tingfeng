@@ -139,9 +139,9 @@ async def get_chat_reply(
     # 获取随机动态状态
     current_state = personality_manager.get_random_state()
 
-    # 获取学习到的风格和黑话
+    # 获取学习到的风格和黑话（提高黑话门槛，减少误用）
     learned_styles = await db_manager.get_style_patterns(group_id, limit=5)
-    learned_slangs = await db_manager.get_slang_candidates(group_id, min_freq=3, stage=2)
+    learned_slangs = (await db_manager.get_slang_candidates(group_id, min_freq=10, stage=2))[:5]
 
     # 获取相关的三元组知识
     knowledge_triplets = await db_manager.get_knowledge_triplets(group_id, limit=10)
@@ -329,7 +329,7 @@ async def get_chat_reply(
 
         # 第一次流式调用：使用思考模式处理器
         logger.debug(f"发送请求到 LLM: {creds['model']}")
-        
+
         async def chunk_callback_wrapper(chunk):
             """收集工具调用的回调函数"""
             if chunk.choices and chunk.choices[0].delta.tool_calls:
@@ -348,41 +348,41 @@ async def get_chat_reply(
                             tool_calls_dict[idx]["name"] = tool_call_chunk.function.name
                         if tool_call_chunk.function.arguments:
                             tool_calls_dict[idx]["arguments"] += tool_call_chunk.function.arguments
-        
+
         tool_calls_dict = {}
-        
+
         stream = await client.chat.completions.create(**stream_params)
         logger.debug(f"开始接收流式响应")
-        
+
         # 使用思考模式处理器处理流式响应
         stream_result = await thinking_handler.process_streaming_response(
             stream=stream,
-            model_name=creds['model'],
+            model_name=creds["model"],
             collect_thinking=True,
             chunk_callback=chunk_callback_wrapper,
         )
-        
+
         reply_content = stream_result["content"]
         reasoning_content = stream_result["thinking"]
         has_thinking = stream_result["has_thinking"]
         elapsed = stream_result["elapsed_time"]
         chunk_count = stream_result["chunk_count"]
-        
+
         logger.info(
             f"流式传输完成: 耗时 {elapsed:.1f}s, {chunk_count} chunks, "
             f"内容长度 {len(reply_content)}, 推理长度 {len(reasoning_content)}, "
             f"思考模式: {'是' if has_thinking else '否'}"
         )
-        
+
         # 如果超时导致没有内容，返回错误
         if elapsed > 25 and not reply_content and not reasoning_content:
             logger.error(f"流式传输超时且无内容: {elapsed:.1f}s")
             return {"text": f"思考超时了，脑子有点卡顿... (扶额)", "sticker": None}
-        
+
         # 使用最终回复，如果没有则使用推理内容（作为备选）
         final_content = reply_content if reply_content else reasoning_content
         final_content = final_content.strip()
-        
+
         # 如果有工具调用，执行并再次流式生成
         if tool_calls_dict:
             logger.info(f"检测到 {len(tool_calls_dict)} 个工具调用")
@@ -433,9 +433,13 @@ async def get_chat_reply(
                         model_name=creds["model"],
                         collect_thinking=True,
                     )
-                    
+
                     # 优先使用最终回复
-                    final_content = tool_stream_result["content"] if tool_stream_result["content"] else tool_stream_result["thinking"]
+                    final_content = (
+                        tool_stream_result["content"]
+                        if tool_stream_result["content"]
+                        else tool_stream_result["thinking"]
+                    )
                     final_content = final_content.strip()
                     break
                 else:
@@ -467,7 +471,7 @@ async def get_chat_reply(
         if final_content.startswith("self:"):
             final_content = final_content[5:].strip()
         elif final_content.startswith(f"{bot_config.bot_name}:"):
-            final_content = final_content[len(bot_config.bot_name) + 1:].strip()
+            final_content = final_content[len(bot_config.bot_name) + 1 :].strip()
 
         return {"text": final_content, "sticker": sticker_url}
 

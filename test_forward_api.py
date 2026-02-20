@@ -2,6 +2,7 @@
 测试合并转发消息 API
 用于调试 OneBot V11 get_forward_msg 接口的返回数据结构
 """
+
 import asyncio
 import sys
 from pathlib import Path
