@@ -2,7 +2,7 @@ import aiosqlite
 import datetime
 import json
 from pathlib import Path
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict, Any
 
 
 class DBManager:
@@ -285,6 +285,27 @@ class DBManager:
             messages.reverse()
             return messages
 
+    async def get_new_message_count_since(self, group_id: int, since_timestamp: str) -> int:
+        """获取自指定时间以来的新消息数量"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT COUNT(*) FROM chat_history WHERE group_id = ? AND timestamp > ?",
+                (group_id, since_timestamp),
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
+    async def get_last_vibe_update_time(self, group_id: int) -> Optional[str]:
+        """获取上次群氛围更新时间"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT updated_at FROM bot_personality WHERE group_id = ?", (group_id,)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
     async def get_unprocessed_logs(self, group_id: int, limit: int = 50) -> List[Tuple[int, str]]:
         """获取未处理过的原始记录"""
         async with await self._get_connection() as conn:
@@ -293,7 +314,8 @@ class DBManager:
                 "SELECT id, msg FROM chat_history WHERE group_id = ? AND is_processed = 0 ORDER BY timestamp ASC LIMIT ?",
                 (group_id, limit),
             )
-            return await cursor.fetchall()
+            rows = await cursor.fetchall()
+            return [(row[0], row[1]) for row in rows]
 
     async def mark_as_processed(self, msg_ids: List[int]):
         """标记消息为已处理"""
@@ -361,6 +383,49 @@ class DBManager:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
+    async def list_user_memories(
+        self,
+        group_id: int,
+        user_id: Optional[int] = None,
+        keyword: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """获取用户记忆列表"""
+        query = "SELECT id, user_id, user_name, content, created_at FROM user_memories WHERE group_id = ?"
+        params: List[Any] = [group_id]
+        if user_id is not None:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        if keyword:
+            query += " AND content LIKE ?"
+            params.append(f"%{keyword}%")
+        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(query, tuple(params))
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "user_id": row[1],
+                    "user_name": row[2],
+                    "content": row[3],
+                    "created_at": row[4],
+                }
+                for row in rows
+            ]
+
+    async def delete_user_memory(self, memory_id: int) -> int:
+        """删除指定记忆"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute("DELETE FROM user_memories WHERE id = ?", (memory_id,))
+            await conn.commit()
+            return cursor.rowcount
+
     async def get_sticker_cache(self, file_hash: str) -> Optional[Dict[str, str]]:
         """根据哈希获取表情包缓存"""
         async with await self._get_connection() as conn:
@@ -397,7 +462,7 @@ class DBManager:
             row = await cursor.fetchone()
             return row[0] if row else None
 
-    async def save_sticker_cache(self, file_hash: str, description: str, tag: str, file_id: str = None):
+    async def save_sticker_cache(self, file_hash: str, description: str, tag: str, file_id: Optional[str] = None):
         """保存表情包缓存"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
@@ -427,7 +492,8 @@ class DBManager:
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute("SELECT COUNT(*) FROM stickers")
-            count = (await cursor.fetchone())[0]
+            row = await cursor.fetchone()
+            count = row[0] if row else 0
             await cursor.execute("DELETE FROM stickers")
             await conn.commit()
             return count
@@ -449,9 +515,10 @@ class DBManager:
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute("SELECT group_id, mood_value FROM bot_moods")
-            return await cursor.fetchall()
+            rows = await cursor.fetchall()
+            return [(row[0], row[1]) for row in rows]
 
-    async def get_recent_mood_changes(self, group_id: int, count: int = 10) -> List[Dict[str, any]]:
+    async def get_recent_mood_changes(self, group_id: int, count: int = 10) -> List[Dict[str, Any]]:
         """
         获取最近的心情变化记录
 
@@ -521,7 +588,7 @@ class DBManager:
             await conn.commit()
         return new_mood
 
-    async def get_personality_state(self, group_id: int) -> Dict[str, any]:
+    async def get_personality_state(self, group_id: int) -> Dict[str, Any]:
         """获取人格状态"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
@@ -542,7 +609,7 @@ class DBManager:
             return [row[0] for row in rows]
 
     async def update_personality_state(
-        self, group_id: int, traits: Dict = None, thoughts: str = None, vibe: str = None
+        self, group_id: int, traits: Optional[Dict] = None, thoughts: Optional[str] = None, vibe: Optional[str] = None
     ):
         """更新人格状态"""
         state = await self.get_personality_state(group_id)
@@ -567,7 +634,7 @@ class DBManager:
             )
             await conn.commit()
 
-    async def get_user_relationship(self, group_id: int, user_id: int) -> Dict[str, any]:
+    async def get_user_relationship(self, group_id: int, user_id: int) -> Dict[str, Any]:
         """获取用户关系数据"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
@@ -581,8 +648,13 @@ class DBManager:
             return {"favorability": 50, "status": "陌生人"}
 
     async def update_user_relationship(
-        self, group_id: int, user_id: int, user_name: str, delta_favorability: int = 0, new_status: str = None
-    ) -> Dict[str, any]:
+        self,
+        group_id: int,
+        user_id: int,
+        user_name: str,
+        delta_favorability: int = 0,
+        new_status: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """更新用户好感度和关系状态"""
         current = await self.get_user_relationship(group_id, user_id)
         new_fav = max(0, min(100, current["favorability"] + delta_favorability))
@@ -677,9 +749,9 @@ class DBManager:
         group_id: int,
         phrase: str,
         delta_freq: int = 1,
-        stage: int = None,
-        definition: str = None,
-        context_samples: List[str] = None,
+        stage: Optional[int] = None,
+        definition: Optional[str] = None,
+        context_samples: Optional[List[str]] = None,
     ):
         """更新黑话候选词状态"""
         async with await self._get_connection() as conn:
@@ -720,7 +792,7 @@ class DBManager:
                 )
             await conn.commit()
 
-    async def get_slang_candidates(self, group_id: int, min_freq: int = 0, stage: int = None) -> List[Dict]:
+    async def get_slang_candidates(self, group_id: int, min_freq: int = 0, stage: Optional[int] = None) -> List[Dict]:
         """获取黑话候选词"""
         query = "SELECT phrase, frequency, stage, definition, context_samples FROM slang_candidates WHERE group_id = ? AND frequency >= ?"
         params = [group_id, min_freq]
@@ -743,6 +815,95 @@ class DBManager:
                 for row in rows
             ]
 
+    async def list_slang_candidates(
+        self,
+        group_id: int,
+        stage: Optional[int] = None,
+        min_freq: int = 0,
+        keyword: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """获取黑话候选词列表"""
+        query = (
+            "SELECT phrase, frequency, stage, definition, context_samples, updated_at "
+            "FROM slang_candidates WHERE group_id = ? AND frequency >= ?"
+        )
+        params: List[Any] = [group_id, min_freq]
+        if stage is not None:
+            query += " AND stage = ?"
+            params.append(stage)
+        if keyword:
+            query += " AND (phrase LIKE ? OR definition LIKE ?)"
+            like_keyword = f"%{keyword}%"
+            params.extend([like_keyword, like_keyword])
+        query += " ORDER BY frequency DESC, updated_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(query, tuple(params))
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "phrase": row[0],
+                    "frequency": row[1],
+                    "stage": row[2],
+                    "definition": row[3],
+                    "context_samples": json.loads(row[4] or "[]"),
+                    "updated_at": row[5],
+                }
+                for row in rows
+            ]
+
+    async def delete_slang_candidate(self, group_id: int, phrase: str) -> int:
+        """删除黑话候选词"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute("DELETE FROM slang_candidates WHERE group_id = ? AND phrase = ?", (group_id, phrase))
+            await conn.commit()
+            return cursor.rowcount
+
+    async def list_style_patterns(
+        self,
+        group_id: int,
+        keyword: Optional[str] = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """获取风格模式列表"""
+        query = "SELECT id, context, style_desc, weight, updated_at FROM style_patterns WHERE group_id = ?"
+        params: List[Any] = [group_id]
+        if keyword:
+            query += " AND (context LIKE ? OR style_desc LIKE ?)"
+            like_keyword = f"%{keyword}%"
+            params.extend([like_keyword, like_keyword])
+        query += " ORDER BY weight DESC, updated_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(query, tuple(params))
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "context": row[1],
+                    "style_desc": row[2],
+                    "weight": row[3],
+                    "updated_at": row[4],
+                }
+                for row in rows
+            ]
+
+    async def delete_style_pattern_by_id(self, style_id: int) -> int:
+        """删除风格模式"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute("DELETE FROM style_patterns WHERE id = ?", (style_id,))
+            await conn.commit()
+            return cursor.rowcount
+
     async def add_knowledge_triplet(
         self, group_id: int, subject: str, predicate: str, obj: str, confidence: float = 1.0
     ):
@@ -761,10 +922,12 @@ class DBManager:
             )
             await conn.commit()
 
-    async def get_knowledge_triplets(self, group_id: int, subject: str = None, limit: int = 50) -> List[Dict]:
+    async def get_knowledge_triplets(
+        self, group_id: int, subject: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
         """查询知识三元组"""
         query = "SELECT subject, predicate, object, confidence FROM knowledge_triplets WHERE group_id = ?"
-        params = [group_id]
+        params: List[Any] = [group_id]
         if subject:
             query += " AND subject = ?"
             params.append(subject)
@@ -778,7 +941,11 @@ class DBManager:
             return [{"subject": row[0], "predicate": row[1], "object": row[2], "confidence": row[3]} for row in rows]
 
     async def delete_knowledge_triplet(
-        self, group_id: int, subject: str = None, predicate: str = None, obj: str = None
+        self,
+        group_id: int,
+        subject: Optional[str] = None,
+        predicate: Optional[str] = None,
+        obj: Optional[str] = None,
     ) -> int:
         """
         删除知识三元组
@@ -796,7 +963,7 @@ class DBManager:
             cursor = await conn.cursor()
 
             conditions = ["group_id = ?"]
-            params = [group_id]
+            params: List[Any] = [group_id]
 
             if subject:
                 conditions.append("subject = ?")
@@ -815,7 +982,9 @@ class DBManager:
 
             return deleted_count
 
-    async def delete_style_pattern(self, group_id: int, context: str = None, style_desc: str = None) -> int:
+    async def delete_style_pattern(
+        self, group_id: int, context: Optional[str] = None, style_desc: Optional[str] = None
+    ) -> int:
         """
         删除风格模式
 
@@ -831,7 +1000,7 @@ class DBManager:
             cursor = await conn.cursor()
 
             conditions = ["group_id = ?"]
-            params = [group_id]
+            params: List[Any] = [group_id]
 
             if context:
                 conditions.append("context = ?")
@@ -926,8 +1095,9 @@ class DBManager:
             )
 
             rows = await cursor.fetchall()
-            if rows:
-                return rows[0][0] if rows[0] else None
+            rows_list = list(rows)
+            if rows_list:
+                return rows_list[0][0] if rows_list[0] else None
 
             return None
 
@@ -944,7 +1114,7 @@ class DBManager:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
-    async def get_user_relationship_cross_group(self, group_id: int, user_id: int) -> Dict[str, any]:
+    async def get_user_relationship_cross_group(self, group_id: int, user_id: int) -> Dict[str, Any]:
         """获取用户关系（跨群查询）"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
@@ -952,12 +1122,13 @@ class DBManager:
             await cursor.execute("SELECT favorability, status FROM user_relationships WHERE user_id = ?", (user_id,))
 
             rows = await cursor.fetchall()
-            if rows:
+            rows_list = list(rows)
+            if rows_list:
                 from collections import Counter
 
-                avg_fav = int(sum(r[0] for r in rows) / len(rows))
+                avg_fav = int(sum(r[0] for r in rows_list) / len(rows_list))
 
-                status_counter = Counter(r[1] for r in rows)
+                status_counter = Counter(r[1] for r in rows_list)
                 most_common_status = status_counter.most_common(1)[0][0]
 
                 return {"favorability": avg_fav, "status": most_common_status}
@@ -981,7 +1152,7 @@ class DBManager:
             for table in tables:
                 await cursor.execute(f"SELECT COUNT(*) FROM {table}")
                 result = await cursor.fetchone()
-                stats[table] = result[0]
+                stats[table] = result[0] if result else 0
 
             return stats
 
@@ -1069,7 +1240,7 @@ class DBManager:
             result = await cursor.fetchone()
             return result[0] if result else 0
 
-    async def get_last_reply_time(self, group_id: int, only_active: bool = True) -> Optional[datetime]:
+    async def get_last_reply_time(self, group_id: int, only_active: bool = True) -> Optional[datetime.datetime]:
         """
         获取最后一次回复的时间
 

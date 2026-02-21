@@ -149,6 +149,7 @@ class PersonalityManager:
     ) -> str:
         """
         根据内心独白、心情和随机状态，动态调整系统提示词。
+        使用基础人格作为核心底色，群特色作为辅助调味。
         """
         state = await db_manager.get_personality_state(group_id)
         style_data = {}
@@ -161,17 +162,35 @@ class PersonalityManager:
             else:
                 style_data = {"vibe": "正常聊天"}
         except:
-            style_data = {"vibe": state.get("style_vibe") or "正常聊天"}
+            style_data = {"vibe": "正常聊天"}
 
         if not isinstance(style_data, dict):
             style_data = {"vibe": "正常聊天"}
 
-        vibe = style_data.get("vibe", "正常聊天")
-        slang = style_data.get("slang", [])
-        patterns = style_data.get("sentence_patterns", [])
+        # 获取基础人格配置
+        base_config = bot_config.base_personality
+        base_vibe = base_config.vibe
+        base_slang = base_config.base_slang
+        base_patterns = base_config.base_patterns
+        use_group_feature = random.random() < base_config.group_feature_probability
 
-        slang_str = "、".join(slang) if slang else "暂无"
-        patterns_str = "、".join(patterns) if patterns else "暂无"
+        # 获取群特色数据
+        group_vibe = style_data.get("vibe", "正常聊天")
+        group_slang = style_data.get("slang", [])
+        group_patterns = style_data.get("sentence_patterns", [])
+
+        # 决定使用哪些语言特征
+        if use_group_feature and group_slang:
+            slang = base_slang + group_slang[:3]  # 基础黑话 + 群特色（最多3个）
+            patterns = base_patterns + group_patterns[:2]  # 基础口癖 + 群特色（最多2个）
+            vibe_note = f"（当前群氛围：{group_vibe}）"
+        else:
+            slang = base_slang
+            patterns = base_patterns
+            vibe_note = ""
+
+        slang_str = "、".join(slang)
+        patterns_str = "、".join(patterns)
 
         state_str = f"- **当前情绪状态**：{current_state['name']} ({current_state['desc']})" if current_state else ""
 
@@ -183,16 +202,17 @@ class PersonalityManager:
         dynamic_prompt = f"""
 {bot_config.prompt}
 
+### 你的核心人格（这是你的本质，请保持稳定）：
+- **性格底色**：{base_vibe}
+- **常用表达**：{slang_str}
+- **习惯口癖**：{patterns_str}
+{vibe_note}
+
 ### 此时此刻的你 (动态状态)：
 - **当前心情**：{mood_desc}
 {state_str}
 {creator_info}
 - **内心独白**（仅供参考，严禁在回复中直接输出）：{thoughts}
-- **群聊氛围感**：{vibe}
-
-### 本群语言特征 (请参考)：
-- **本群流行黑话/关键词**：{slang_str}
-- **本群常用口癖/句式**：{patterns_str}
 
 ### 核心表达原则（必须遵守）：
 - **沉默是金**：不是每一句话都需要回复，你已经通过决策引擎判断过应该回复，所以回复时请保持克制和精炼。

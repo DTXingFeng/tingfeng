@@ -157,6 +157,17 @@ async def get_chat_reply(
     # 3. 构造 Prompt
     system_prompt = await personality_manager.get_dynamic_identity(group_id, thoughts, mood_desc, current_state)
 
+    # 注入工具使用提示
+    available_tools = tool_registry.list_tools()
+    if available_tools:
+        tool_hint = "\n\n### 可用工具说明：\n"
+        tool_hint += "你拥有以下工具可以使用，当遇到需要最新信息、搜索网络内容的问题时，请主动使用这些工具：\n"
+        tool_hint += f"- **web_search**: 网络搜索工具。当用户询问新闻、最新信息、技术文档、网络流行语、梗等内容时，请使用此工具搜索相关信息。\n"
+        tool_hint += "- **get_current_time**: 获取当前时间。当用户询问时间、日期时使用。\n"
+        tool_hint += "- **get_system_resource**: 获取系统资源信息。当用户询问系统状态时使用。\n"
+        tool_hint += "\n使用工具时请注意：只在你真正需要的时候才调用工具，不要滥用。搜索时请使用合适的关键词。"
+        system_prompt += tool_hint
+
     # 注入学习到的社交特征
     learning_context = ""
     if learned_styles:
@@ -387,6 +398,11 @@ async def get_chat_reply(
         if tool_calls_dict:
             logger.info(f"检测到 {len(tool_calls_dict)} 个工具调用")
 
+            # 构建包含工具调用的消息列表
+            tool_messages = optimized_messages.copy()
+
+            # 添加 assistant 的工具调用记录
+            assistant_tool_calls = []
             for idx, tool_call_data in tool_calls_dict.items():
                 tool_name = tool_call_data["name"]
                 tool_args = tool_call_data["arguments"]
@@ -405,46 +421,65 @@ async def get_chat_reply(
                     logger.error(f"工具参数解析失败: {tool_args}")
                     tool_args = {}
 
+                # 生成工具调用 ID
+                tool_call_id = f"call_{idx}"
+
+                assistant_tool_calls.append(
+                    {
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {"name": tool_name, "arguments": json.dumps(tool_args)},
+                    }
+                )
+
                 # 执行工具
                 tool_result = await tool_registry.execute(tool_name, **tool_args)
 
                 if tool_result.get("success"):
                     result_data = tool_result.get("data", {})
-                    logger.info(f"工具 {tool_name} 执行成功: {result_data}")
+                    logger.info(f"工具 {tool_name} 执行成功")
 
-                    # 将工具结果返回给 LLM
-                    tool_result_message = {
-                        "role": "system",
-                        "content": f"### 工具执行结果（{tool_name}）：\n{json.dumps(result_data, ensure_ascii=False)}",
-                    }
-
-                    # 再次使用流式传输生成最终回复
-                    stream = await client.chat.completions.create(
-                        model=creds["model"],
-                        messages=optimized_messages + [tool_result_message],
-                        max_tokens=150,
-                        temperature=0.7,
-                        stream=True,
+                    # 添加工具结果消息（使用 tool role）
+                    tool_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": json.dumps(result_data, ensure_ascii=False),
+                        }
                     )
-
-                    # 使用思考模式处理器处理
-                    tool_stream_result = await thinking_handler.process_streaming_response(
-                        stream=stream,
-                        model_name=creds["model"],
-                        collect_thinking=True,
-                    )
-
-                    # 优先使用最终回复
-                    final_content = (
-                        tool_stream_result["content"]
-                        if tool_stream_result["content"]
-                        else tool_stream_result["thinking"]
-                    )
-                    final_content = final_content.strip()
-                    break
                 else:
                     logger.error(f"工具 {tool_name} 执行失败: {tool_result['error']}")
-                    reply_content = f"工具调用失败了...（扶额）"
+                    # 添加错误结果
+                    tool_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": json.dumps({"error": tool_result["error"]}, ensure_ascii=False),
+                        }
+                    )
+
+            # 添加 assistant 的工具调用消息
+            tool_messages.append({"role": "assistant", "content": None, "tool_calls": assistant_tool_calls})
+
+            # 再次使用流式传输生成最终回复
+            stream = await client.chat.completions.create(
+                model=creds["model"],
+                messages=tool_messages,
+                max_tokens=150,
+                temperature=0.7,
+                stream=True,
+            )
+
+            # 使用思考模式处理器处理
+            tool_stream_result = await thinking_handler.process_streaming_response(
+                stream=stream,
+                model_name=creds["model"],
+                collect_thinking=True,
+            )
+
+            # 优先使用最终回复
+            final_content = tool_stream_result["content"] if tool_stream_result["content"] else tool_stream_result["thinking"]
+            final_content = final_content.strip()
         else:
             # 没有工具调用，使用收集到的文本
             final_content = final_content

@@ -4,6 +4,14 @@ from pathlib import Path
 from typing import Optional, List
 
 
+class BasePersonalityConfig(BaseModel):
+    """基础人格配置，Bot 的核心性格底色"""
+    vibe: str = "活泼、有点小傲娇、偶尔吐槽"  # 基础氛围描述
+    base_slang: List[str] = Field(default_factory=lambda: ["草", "乐", "绷不住了"])  # 基础通用黑话
+    base_patterns: List[str] = Field(default_factory=lambda: ["捏", "的说"])  # 基础口癖
+    group_feature_probability: float = 0.3  # 使用群特色的概率（0-1），越小越保守
+
+
 class BotConfig(BaseModel):
     bot_name: str = "听风"
     bot_qq: str = "391459725"
@@ -17,6 +25,9 @@ class BotConfig(BaseModel):
     decision_interval: int = 60  # 决策间隔时间（秒）
     allowed_groups: List[int] = Field(default_factory=list)  # 白名单
     blocked_groups: List[int] = Field(default_factory=list)  # 黑名单
+    
+    # 基础人格配置（新增）
+    base_personality: BasePersonalityConfig = Field(default_factory=BasePersonalityConfig)
 
     class Config:
         arbitrary_types_allowed = True
