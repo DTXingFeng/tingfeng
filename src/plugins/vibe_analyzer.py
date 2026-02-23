@@ -20,29 +20,26 @@ async def analyze_all_groups_vibe():
             # 等待 6 小时
             await asyncio.sleep(VIBE_UPDATE_INTERVAL)
 
-            # 获取所有活跃群组
-            group_moods = await db_manager.get_all_group_moods()
-            if not group_moods:
+            # 获取所有活跃群组（从 bot_personality 表获取，而不是 bot_moods）
+            active_groups = await db_manager.get_all_groups()
+            if not active_groups:
+                logger.info("没有找到活跃群组，跳过氛围分析")
                 continue
 
-            for group_id, _ in group_moods:
+            for group_id in active_groups:
                 try:
-                    # 检查上次更新时间和新消息数量
-                    last_update_time = await db_manager.get_last_vibe_update_time(group_id)
+                    # 检查是否应该更新群氛围
+                    should_update, msg_count, last_time = await db_manager.should_update_vibe(group_id, MIN_NEW_MESSAGES)
                     
-                    if last_update_time:
-                        # 计算自上次更新以来的新消息数量
-                        new_msg_count = await db_manager.get_new_message_count_since(group_id, last_update_time)
-                        
-                        if new_msg_count < MIN_NEW_MESSAGES:
-                            logger.info(f"群 {group_id} 新消息数量不足 ({new_msg_count}/{MIN_NEW_MESSAGES})，跳过氛围分析")
-                            continue
+                    if not should_update:
+                        logger.info(f"群 {group_id} 跳过氛围分析：消息数量不足 ({msg_count}/{MIN_NEW_MESSAGES})，上次更新：{last_time}")
+                        continue
                     
-                    logger.info(f"开始分析群 {group_id} 的聊天氛围...")
+                    logger.info(f"群 {group_id} 开始氛围分析：检测到 {msg_count} 条新消息，上次更新：{last_time or '从未'}")
                     await personality_manager.update_group_vibe(group_id)
                     
                 except Exception as e:
-                    logger.error(f"分析群 {group_id} 氛围时出错: {e}")
+                    logger.error(f"分析群 {group_id} 氛围时出错: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"群氛围分析定时任务出错: {e}")

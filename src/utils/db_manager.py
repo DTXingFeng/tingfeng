@@ -306,6 +306,28 @@ class DBManager:
             row = await cursor.fetchone()
             return row[0] if row else None
 
+    async def should_update_vibe(self, group_id: int, min_messages: int = 100) -> tuple[bool, int, Optional[str]]:
+        """
+        判断是否应该更新群氛围
+        
+        Returns:
+            (should_update, message_count, last_update_time)
+            - should_update: 是否应该更新
+            - message_count: 自上次更新以来的消息数量
+            - last_update_time: 上次更新时间
+        """
+        last_update_time = await self.get_last_vibe_update_time(group_id)
+        
+        if not last_update_time:
+            # 从未更新过，应该更新
+            return True, 0, None
+        
+        # 计算自上次更新以来的新消息数量
+        new_msg_count = await self.get_new_message_count_since(group_id, last_update_time)
+        
+        should_update = new_msg_count >= min_messages
+        return should_update, new_msg_count, last_update_time
+
     async def get_unprocessed_logs(self, group_id: int, limit: int = 50) -> List[Tuple[int, str]]:
         """获取未处理过的原始记录"""
         async with await self._get_connection() as conn:
