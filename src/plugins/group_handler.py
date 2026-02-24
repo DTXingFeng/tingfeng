@@ -459,7 +459,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             # 4. 尝试进行记忆固化 (每 50 条消息处理一次)
             await consolidate_memories(group_id)
         except Exception as e:
-            logger.error(f"处理背景学习逻辑失败: {e}", exc_info=True)
+            logger.opt(exception=True).error("处理背景学习逻辑失败: {}", e)
 
     asyncio.create_task(create_limited_task(store_and_consolidate()))
 

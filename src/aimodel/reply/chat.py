@@ -1,4 +1,5 @@
 from openai import AsyncOpenAI
+from nonebot.adapters.onebot.v11 import Bot
 from src.config.ai_config import ai_config, ai_config_manager
 from src.config.config import bot_config
 from src.utils.db_manager import db_manager
@@ -10,7 +11,7 @@ from src.utils.logger import get_logger
 from src.utils.error_handler import handle_errors, APIError
 from src.utils.thinking_mode import thinking_handler, stream_with_thinking_mode
 from src.mcp.registry import tool_registry
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, cast
 import random
 import re
 import asyncio
@@ -43,8 +44,8 @@ async def get_chat_reply(
     current_msg: str,
     user_id: Optional[int] = None,
     reply_message_id: Optional[int] = None,
-    bot=None,
-) -> Dict[str, any]:
+    bot: Optional[Bot] = None,
+) -> Dict[str, Any]:
     """
     获取 AI 回复逻辑
     返回格式: {"text": str, "sticker": Optional[str]}
@@ -124,11 +125,15 @@ async def get_chat_reply(
     long_term_memories = []
 
     # 获取用户画像和具体记忆（使用跨群查询）
-    user_profile = await db_manager.get_user_impression_cross_group(group_id, user_name)
-    user_specific_memories = await db_manager.get_user_specific_memories_cross_group(group_id, user_name, limit=5)
+    user_profile = None
+    user_specific_memories = []
+    rel_data = {"status": "陌生人", "favorability": 50}
+    if user_id:
+        user_profile = await db_manager.get_user_impression_cross_group(group_id, user_id)
+        user_specific_memories = await db_manager.get_user_specific_memories_cross_group(group_id, user_id, limit=5)
 
-    # 获取关系状态（使用跨群查询）
-    rel_data = await db_manager.get_user_relationship_cross_group(group_id, user_name)
+        # 获取关系状态（使用跨群查询）
+        rel_data = await db_manager.get_user_relationship_cross_group(group_id, user_id)
     rel_status = rel_data["status"]
     rel_fav = rel_data["favorability"]
 
@@ -448,23 +453,25 @@ async def get_chat_reply(
                         }
                     )
                 else:
-                    logger.error(f"工具 {tool_name} 执行失败: {tool_result['error']}")
+                    tool_error = tool_result.get("error")
+                    logger.error(f"工具 {tool_name} 执行失败: {tool_error}")
                     # 添加错误结果
                     tool_messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": json.dumps({"error": tool_result["error"]}, ensure_ascii=False),
+                            "content": json.dumps({"error": tool_error}, ensure_ascii=False),
                         }
                     )
 
             # 添加 assistant 的工具调用消息
-            tool_messages.append({"role": "assistant", "content": None, "tool_calls": assistant_tool_calls})
+            tool_messages.append({"role": "assistant", "content": "", "tool_calls": assistant_tool_calls})
 
             # 再次使用流式传输生成最终回复
+            tool_messages_payload = cast(list, tool_messages)
             stream = await client.chat.completions.create(
                 model=creds["model"],
-                messages=tool_messages,
+                messages=tool_messages_payload,
                 max_tokens=150,
                 temperature=0.7,
                 stream=True,
@@ -478,7 +485,9 @@ async def get_chat_reply(
             )
 
             # 优先使用最终回复
-            final_content = tool_stream_result["content"] if tool_stream_result["content"] else tool_stream_result["thinking"]
+            final_content = (
+                tool_stream_result["content"] if tool_stream_result["content"] else tool_stream_result["thinking"]
+            )
             final_content = final_content.strip()
         else:
             # 没有工具调用，使用收集到的文本
@@ -521,11 +530,11 @@ async def get_chat_reply(
         error_msg = str(e)
 
         if "timeout" in error_msg.lower() or "time" in error_msg.lower():
-            logger.error(f"AI 调用超时: {error_msg}", exc_info=True)
+            logger.opt(exception=True).error("AI 调用超时: {}", error_msg)
             return {"text": f"思考超时了，脑子有点卡顿... (扶额)", "sticker": None}
-        elif "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
-            logger.error(f"API 速率限制: {error_msg}", exc_info=True)
+        if "rate limit" in error_msg.lower() or "quota" in error_msg.lower():
+            logger.opt(exception=True).error("API 速率限制: {}", error_msg)
             return {"text": f"大脑过载了，休息一下... (扶额)", "sticker": None}
-        else:
-            logger.error(f"AI 回复生成出错 [{error_type}]: {error_msg}", exc_info=True)
-            return {"text": f"系统异常，暂时无法回复... (扶额)", "sticker": None}
+
+        logger.opt(exception=True).error("AI 回复生成出错 [{}]: {}", error_type, error_msg)
+        return {"text": f"系统异常，暂时无法回复... (扶额)", "sticker": None}

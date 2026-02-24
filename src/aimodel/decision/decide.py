@@ -125,6 +125,7 @@ async def should_i_reply(
         slang_context = "\n### 本群特有黑话/暗语库：\n" + "\n".join(slang_list)
 
     long_term_memories = []
+    content = ""
     try:
         query_vectors = await get_embeddings([current_msg])
         if query_vectors and len(query_vectors) > 0:
@@ -385,11 +386,9 @@ async def should_i_reply(
                 logger.info(f"决策模型调用工具: {tool_name}")
 
                 try:
-                    import json as json_lib
-
                     if isinstance(tool_args, str):
-                        tool_args = json_lib.loads(tool_args)
-                except json_lib.JSONDecodeError as e:
+                        tool_args = json.loads(tool_args)
+                except json.JSONDecodeError as e:
                     logger.error(f"工具参数解析失败: {e}")
                     tool_args = {}
 
@@ -481,7 +480,7 @@ async def should_i_reply(
         }
 
     except json.JSONDecodeError as e:
-        logger.error(f"决策结果JSON解析失败: {e}, 原始内容: {content}")
+        logger.error("决策结果JSON解析失败: {}，原始内容: {}", e, content)
         return {
             "should_reply": is_at_me,
             "mood_impact": 0,
@@ -494,7 +493,7 @@ async def should_i_reply(
         }
     except Exception as e:
         error_msg = str(e) if str(e) else type(e).__name__
-        logger.error(f"决策过程出错: {type(e).__name__}: {error_msg}", exc_info=True)
+        logger.opt(exception=True).error("决策过程出错: {}: {}", type(e).__name__, error_msg)
         return {
             "should_reply": is_at_me,
             "mood_impact": 0,

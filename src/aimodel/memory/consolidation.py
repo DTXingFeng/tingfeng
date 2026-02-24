@@ -47,7 +47,7 @@ async def consolidate_memories(group_id: int):
             if not creds:
                 return
 
-            client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
+            client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=60.0)
 
             prompt = (
                 f"你现在是'{bot_config.bot_name}'的深度记忆固化模块。你的任务是从最近的群聊记录中提取具有长期社交价值的'记忆碎片'。\n\n"
@@ -85,7 +85,10 @@ async def consolidate_memories(group_id: int):
             optimized_prompt = prompt + f"\n\n### 聊天记录：\n{chat_content}\n\n### 提取结果："
 
             response = await client.chat.completions.create(
-                model=creds["model"], messages=[{"role": "user", "content": optimized_prompt}], temperature=0.3
+                model=creds["model"],
+                messages=[{"role": "user", "content": optimized_prompt}],
+                temperature=0.3,
+                max_tokens=600,
             )
 
             # 使用思考模式处理器处理响应
@@ -144,25 +147,26 @@ async def consolidate_memories(group_id: int):
                     if "|" not in line and len(line) > 5:
                         shards.append(line)
 
-                # 应用氛围调整
+            # 应用氛围调整
+            if mood_adjustment != 0:
                 await db_manager.update_mood(group_id, mood_adjustment)
 
-                if shards:
-                    vectors = await get_embeddings(shards)
-                    for i, shard in enumerate(shards):
-                        await vector_db.add_memory(
-                            group_id=group_id,
-                            text=f"[碎片] {shard}",
-                            vector=vectors[i],
-                            metadata={"type": "shard"},
-                        )
+            if shards:
+                vectors = await get_embeddings(shards)
+                for i, shard in enumerate(shards):
+                    await vector_db.add_memory(
+                        group_id=group_id,
+                        text=f"[碎片] {shard}",
+                        vector=vectors[i],
+                        metadata={"type": "shard"},
+                    )
 
-                    logger.info(f"群 {group_id} 记忆固化完成：提取了 {len(shards)} 条碎片")
+                logger.info(f"群 {group_id} 记忆固化完成：提取了 {len(shards)} 条碎片")
 
-                # 4. 标记这些原始消息为已处理
-                await db_manager.mark_as_processed(msg_ids)
+            # 4. 标记这些原始消息为已处理
+            await db_manager.mark_as_processed(msg_ids)
 
         except Exception as e:
-            logger.error(f"记忆固化失败 (群 {group_id}): {e}", exc_info=True)
+            logger.opt(exception=True).error("记忆固化失败 (群 {}): {}", group_id, e)
         finally:
             active_consolidation_groups.discard(group_id)

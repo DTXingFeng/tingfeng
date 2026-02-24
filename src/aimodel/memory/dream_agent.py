@@ -28,7 +28,7 @@ async def dream_and_optimize(group_id: int):
     if not creds:
         logger.warning(f"无法获取梦境代理模型凭据，跳过群 {group_id} 的梦境处理")
         return
-    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
+    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=60.0)
 
     triplet_str = "\n".join([f"- {t['subject']} --({t['predicate']})--> {t['object']}" for t in triplets])
     pattern_str = "\n".join(
@@ -133,7 +133,7 @@ async def dream_and_optimize(group_id: int):
         logger.info(f"群 {group_id} 梦境复盘完成: 合并 {merge_count} 项，删除 {delete_count} 项")
 
     except Exception as e:
-        logger.error(f"梦境代理运行失败 (群 {group_id}): {e}", exc_info=True)
+        logger.opt(exception=True).error("梦境代理运行失败 (群 {}): {}", group_id, e)
 
 
 async def start_dream_cycle():
