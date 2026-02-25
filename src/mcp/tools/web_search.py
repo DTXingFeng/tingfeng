@@ -40,33 +40,33 @@ def parse_bing_results(html_content: str, max_results: int = 10) -> list:
         if url_match:
             url = url_match.group(1)
             # 清理 URL（移除 Bing 跟踪参数）
-            url = re.sub(r'^https://cc\.bingj\.com/cache\.aspx\?.*?&(u=[^&]+)', r'https://\1', url)
+            url = re.sub(r"^https://cc\.bingj\.com/cache\.aspx\?.*?&(u=[^&]+)", r"https://\1", url)
             url = html.unescape(url)
             result["url"] = url
 
         # 提取标题
-        title_match = re.search(r'<h2[^>]*>.*?<a[^>]*>(.*?)</a>', match, re.DOTALL | re.IGNORECASE)
+        title_match = re.search(r"<h2[^>]*>.*?<a[^>]*>(.*?)</a>", match, re.DOTALL | re.IGNORECASE)
         if title_match:
             title = title_match.group(1)
             # 移除 HTML 标签
-            title = re.sub(r'<[^>]+>', '', title)
+            title = re.sub(r"<[^>]+>", "", title)
             title = html.unescape(title)
-            title = ' '.join(title.split())
+            title = " ".join(title.split())
             result["title"] = title
 
         # 提取描述
         snippet_patterns = [
             r'<div[^>]*class="[^"]*b_caption[^"]*"[^>]*>(.*?)</div>',
-            r'<p[^>]*>(.*?)</p>',
+            r"<p[^>]*>(.*?)</p>",
         ]
         for snippet_pattern in snippet_patterns:
             snippet_match = re.search(snippet_pattern, match, re.DOTALL | re.IGNORECASE)
             if snippet_match:
                 snippet = snippet_match.group(1)
                 # 移除 HTML 标签
-                snippet = re.sub(r'<[^>]+>', '', snippet)
+                snippet = re.sub(r"<[^>]+>", "", snippet)
                 snippet = html.unescape(snippet)
-                snippet = ' '.join(snippet.split())
+                snippet = " ".join(snippet.split())
                 if len(snippet) > 20:
                     result["snippet"] = snippet
                     break

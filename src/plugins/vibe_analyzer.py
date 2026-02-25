@@ -29,15 +29,21 @@ async def analyze_all_groups_vibe():
             for group_id in active_groups:
                 try:
                     # 检查是否应该更新群氛围
-                    should_update, msg_count, last_time = await db_manager.should_update_vibe(group_id, MIN_NEW_MESSAGES)
-                    
+                    should_update, msg_count, last_time = await db_manager.should_update_vibe(
+                        group_id, MIN_NEW_MESSAGES
+                    )
+
                     if not should_update:
-                        logger.info(f"群 {group_id} 跳过氛围分析：消息数量不足 ({msg_count}/{MIN_NEW_MESSAGES})，上次更新：{last_time}")
+                        logger.info(
+                            f"群 {group_id} 跳过氛围分析：消息数量不足 ({msg_count}/{MIN_NEW_MESSAGES})，上次更新：{last_time}"
+                        )
                         continue
-                    
-                    logger.info(f"群 {group_id} 开始氛围分析：检测到 {msg_count} 条新消息，上次更新：{last_time or '从未'}")
+
+                    logger.info(
+                        f"群 {group_id} 开始氛围分析：检测到 {msg_count} 条新消息，上次更新：{last_time or '从未'}"
+                    )
                     await personality_manager.update_group_vibe(group_id)
-                    
+
                 except Exception as e:
                     logger.error(f"分析群 {group_id} 氛围时出错: {e}", exc_info=True)
 

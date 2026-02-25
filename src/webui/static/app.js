@@ -348,7 +348,52 @@ const App = (() => {
     const userId = impressionUserId.value.trim();
     const data = await fetchJson(`/api/user/impression?group_id=${groupId}&user_id=${userId}`);
     impressionText.value = data.impression || "";
+    
+    // 同时加载印象历史
+    try {
+      const historyData = await fetchJson(`/api/user/impression/history?user_id=${userId}&limit=10`);
+      renderImpressionHistory(historyData.items || []);
+    } catch (error) {
+      console.error("加载印象历史失败:", error);
+    }
+    
     setStatus("用户印象已加载");
+  };
+
+  const renderImpressionHistory = (items) => {
+    let historyContainer = document.getElementById("impressionHistory");
+    if (!historyContainer) {
+      // 如果历史记录容器不存在，动态创建它
+      const impressionPanel = impressionText.closest(".panel");
+      const newPanel = document.createElement("div");
+      newPanel.className = "panel";
+      newPanel.innerHTML = `
+        <div class="panel-header">
+          <div class="panel-title">印象历史</div>
+        </div>
+        <div class="panel-body">
+          <div class="table" id="impressionHistory"></div>
+        </div>
+      `;
+      impressionPanel.after(newPanel);
+      historyContainer = document.getElementById("impressionHistory");
+    }
+    
+    if (!items.length) {
+      historyContainer.innerHTML = `<div class="row"><div class="row-title">暂无历史记录</div></div>`;
+      return;
+    }
+    
+    historyContainer.innerHTML = items
+      .map(
+        (item) => `
+        <div class="row">
+          <div class="row-title">${item.impression}</div>
+          <div class="row-meta">${item.user_name || "-"} · 群组 ${item.group_id} · ${item.created_at}</div>
+        </div>
+      `
+      )
+      .join("");
   };
 
   const saveImpression = async () => {
@@ -365,6 +410,9 @@ const App = (() => {
       }),
     });
     setStatus("用户印象已保存");
+    
+    // 保存后自动刷新印象历史
+    await loadImpression();
   };
 
   const loadRelationship = async () => {

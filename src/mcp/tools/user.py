@@ -42,6 +42,9 @@ class UserProfileTool(BaseTool):
         # 获取用户印象（跨群查询）
         impression = await db_manager.get_user_impression_cross_group(group_id, user_id)
 
+        # 获取印象历史
+        impression_history = await db_manager.get_user_impression_history(user_id, limit=10)
+
         # 获取关系（跨群查询）
         relationship = await db_manager.get_user_relationship_cross_group(group_id, user_id)
 
@@ -52,6 +55,7 @@ class UserProfileTool(BaseTool):
             "user_name": user_name,
             "user_id": user_id,
             "impression": impression,
+            "impression_history": impression_history,
             "relationship": relationship,
             "memory_count": len(memories),
             "is_creator": user_id == bot_config.creator_id if bot_config.creator_id else False,
@@ -129,4 +133,118 @@ class UpdateRelationshipTool(BaseTool):
             "updated_relationship": result,
             "delta_favorability": delta_favorability,
             "new_status": new_status,
+        }
+
+
+class UpdateImpressionTool(BaseTool):
+    """
+    增量更新用户印象工具
+    支持添加、删除、更新特定印象特征，而不是完全覆盖
+    """
+
+    name = "update_impression"
+    description = """增量更新对某个群友的印象。支持以下操作：
+    - 使用 "+新特征" 添加新的印象特征（如："+喜欢打游戏"）
+    - 使用 "-要删除的特征" 删除不再适用的特征（如："-"内向""）
+    - 使用 "~旧特征|新特征" 更新现有特征（如："~害羞|开朗"）
+    - 直接描述新的特征会自动与现有印象智能合并（去重、避免重复）
+    
+    示例输入："开朗，+喜欢帮人，-内向" 或 "很友善，+技术好"
+    """
+    parameters = {
+        "user_name": {"type": "string", "description": "用户名", "required": True},
+        "group_id": {"type": "integer", "description": "群组 ID", "required": True},
+        "impression_updates": {
+            "type": "string",
+            "description": "印象更新内容，支持 +添加、-删除、~更新操作，用逗号分隔",
+            "required": True,
+        },
+    }
+
+    async def execute(self, user_name: str, group_id: int, impression_updates: str) -> Dict[str, Any]:
+        """
+        执行增量更新印象
+
+        Args:
+            user_name: 用户名
+            group_id: 群组 ID
+            impression_updates: 印象更新内容
+
+        Returns:
+            dict: 更新结果
+        """
+        # 获取 user_id
+        user_id = await db_manager.get_user_id_by_name(group_id, user_name)
+        if not user_id:
+            raise ValueError(f"未找到用户 '{user_name}' 的 QQ 号，请让该用户先在群内发言")
+
+        # 获取当前印象
+        current_impression = await db_manager.get_user_impression(group_id, user_id)
+
+        # 使用智能合并更新印象
+        await db_manager.update_user_impression(group_id, user_id, user_name, impression_updates)
+
+        # 获取更新后的印象
+        new_impression = await db_manager.get_user_impression(group_id, user_id)
+
+        return {
+            "user_name": user_name,
+            "old_impression": current_impression,
+            "new_impression": new_impression,
+            "updates_applied": impression_updates,
+            "success": True,
+        }
+
+
+class ReplaceImpressionTool(BaseTool):
+    """
+    完全替换用户印象工具
+    仅在需要完全重置印象时使用
+    """
+
+    name = "replace_impression"
+    description = """完全替换对某个群友的印象（慎用）。
+    这会删除所有现有印象，替换为新的内容。
+    大多数情况下应该使用 update_impression 进行增量更新。
+    仅在印象完全错误或需要彻底重置时使用此工具。
+    """
+    parameters = {
+        "user_name": {"type": "string", "description": "用户名", "required": True},
+        "group_id": {"type": "integer", "description": "群组 ID", "required": True},
+        "new_impression": {
+            "type": "string",
+            "description": "新的完整印象描述",
+            "required": True,
+        },
+    }
+
+    async def execute(self, user_name: str, group_id: int, new_impression: str) -> Dict[str, Any]:
+        """
+        执行完全替换印象
+
+        Args:
+            user_name: 用户名
+            group_id: 群组 ID
+            new_impression: 新的完整印象
+
+        Returns:
+            dict: 替换结果
+        """
+        # 获取 user_id
+        user_id = await db_manager.get_user_id_by_name(group_id, user_name)
+        if not user_id:
+            raise ValueError(f"未找到用户 '{user_name}' 的 QQ 号，请让该用户先在群内发言")
+
+        # 获取当前印象
+        current_impression = await db_manager.get_user_impression(group_id, user_id)
+
+        # 完全替换印象
+        await db_manager.replace_user_impression(group_id, user_id, user_name, new_impression)
+
+        return {
+            "user_name": user_name,
+            "old_impression": current_impression,
+            "new_impression": new_impression,
+            "replaced": True,
+            "success": True,
         }

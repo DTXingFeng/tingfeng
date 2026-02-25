@@ -59,5 +59,9 @@ async def daily_schedule_worker():
 @driver.on_startup
 async def start_schedule_manager():
     """机器人启动时开启作息管理任务"""
-    asyncio.create_task(daily_schedule_worker())
-    logger.info("每日作息管理定时任务已启动")
+    # 只有在作息表系统启用时才启动定时任务
+    if bot_config.enable_schedule:
+        asyncio.create_task(daily_schedule_worker())
+        logger.info("每日作息管理定时任务已启动")
+    else:
+        logger.info("作息表系统已关闭，跳过定时任务启动")

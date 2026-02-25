@@ -4,7 +4,13 @@ MCP 工具加载器
 """
 
 from src.mcp.tools.memory import MemorySearchTool, GetUserMemoriesTool, AddMemoryTool
-from src.mcp.tools.user import UserProfileTool, GetCreatorInfoTool, UpdateRelationshipTool
+from src.mcp.tools.user import (
+    UserProfileTool,
+    GetCreatorInfoTool,
+    UpdateRelationshipTool,
+    UpdateImpressionTool,
+    ReplaceImpressionTool,
+)
 from src.mcp.tools.knowledge import KnowledgeQueryTool, GetCreatorKnowledgeTool, AddKnowledgeTool
 from src.mcp.tools.utility import GetCurrentTimeTool, IsWithinScheduleTool, FormatTextTool, CountWordsTool
 from src.mcp.tools.message import GetRecentMessagesTool, GetMessageContextTool
@@ -35,6 +41,8 @@ def load_all_tools():
     tool_registry.register(UserProfileTool())
     tool_registry.register(GetCreatorInfoTool())
     tool_registry.register(UpdateRelationshipTool())
+    tool_registry.register(UpdateImpressionTool())
+    tool_registry.register(ReplaceImpressionTool())
 
     # 知识相关工具
     tool_registry.register(KnowledgeQueryTool())

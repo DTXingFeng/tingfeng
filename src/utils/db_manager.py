@@ -1,6 +1,7 @@
 import aiosqlite
 import datetime
 import json
+import re
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 
@@ -9,6 +10,117 @@ class DBManager:
     def __init__(self, db_path: str = "data/bot_data.db"):
         self.db_path = Path(db_path)
         self._init_done = False
+
+    @staticmethod
+    def _merge_impressions(old_impression: str, new_impression: str) -> str:
+        """
+        智能合并印象
+
+        支持的操作标记：
+        - "+新内容" - 添加新特征
+        - "-要删除的内容" - 删除不再适用的特征
+        - "~旧内容|新内容" - 更新现有特征
+        - 无标记 - 智能合并（去重、相似内容合并）
+
+        Args:
+            old_impression: 旧的印象
+            new_impression: 新的印象
+
+        Returns:
+            合并后的印象
+        """
+        if not old_impression:
+            return new_impression
+        if not new_impression:
+            return old_impression
+
+        # 解析旧印象为特征列表
+        old_features = [f.strip() for f in old_impression.split("，") if f.strip()]
+        new_features = [f.strip() for f in new_impression.split("，") if f.strip()]
+
+        # 处理新印象中的操作标记
+        features_to_add = []
+        features_to_remove = set()
+        features_to_update = {}
+        features_to_merge = []
+
+        for feature in new_features:
+            if feature.startswith("+"):
+                # 添加操作
+                add_content = feature[1:].strip()
+                if add_content:
+                    features_to_add.append(add_content)
+            elif feature.startswith("-"):
+                # 删除操作
+                remove_content = feature[1:].strip()
+                if remove_content:
+                    features_to_remove.add(remove_content)
+            elif feature.startswith("~"):
+                # 更新操作
+                update_content = feature[1:].strip()
+                if "|" in update_content:
+                    old, new = update_content.split("|", 1)
+                    features_to_update[old.strip()] = new.strip()
+            else:
+                # 普通内容，需要智能合并
+                features_to_merge.append(feature)
+
+        # 构建最终特征列表
+        final_features = []
+
+        # 添加未被删除的旧特征
+        for old_feature in old_features:
+            # 检查是否需要删除（完全匹配或包含）
+            should_remove = False
+            for remove_pattern in features_to_remove:
+                if remove_pattern in old_feature or old_feature == remove_pattern:
+                    should_remove = True
+                    break
+
+            if not should_remove:
+                # 检查是否需要更新
+                updated = False
+                for old_pattern, new_value in features_to_update.items():
+                    if old_pattern in old_feature:
+                        final_features.append(new_value)
+                        updated = True
+                        break
+
+                if not updated:
+                    final_features.append(old_feature)
+
+        # 处理需要智能合并的新特征
+        for merge_feature in features_to_merge:
+            # 检查是否与现有特征重复或相似
+            is_duplicate = False
+            for existing in final_features:
+                # 完全相同
+                if merge_feature == existing:
+                    is_duplicate = True
+                    break
+                # 包含关系（短字符串包含在长字符串中）
+                if len(merge_feature) > 2 and len(existing) > 2:
+                    if merge_feature in existing or existing in merge_feature:
+                        is_duplicate = True
+                        break
+
+            if not is_duplicate:
+                final_features.append(merge_feature)
+
+        # 添加明确要添加的特征
+        for add_feature in features_to_add:
+            if add_feature not in final_features:
+                final_features.append(add_feature)
+
+        # 去重并合并
+        seen = set()
+        unique_features = []
+        for f in final_features:
+            if f not in seen:
+                seen.add(f)
+                unique_features.append(f)
+
+        return "，".join(unique_features) if unique_features else old_impression
 
     async def _ensure_init(self):
         """确保数据库已初始化（懒加载）"""
@@ -62,6 +174,19 @@ class DBManager:
                         impression TEXT,
                         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                         PRIMARY KEY (group_id, user_id)
+                    )
+                """
+                )
+
+                await cursor.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS user_impression_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        group_id INTEGER,
+                        user_id INTEGER,
+                        user_name TEXT,
+                        impression TEXT,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
                 """
                 )
@@ -260,6 +385,9 @@ class DBManager:
                 await cursor.execute(
                     "CREATE INDEX IF NOT EXISTS idx_mood_history_group_time ON mood_history(group_id, timestamp DESC)"
                 )
+                await cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_user_impression_history_user_time ON user_impression_history(user_id, created_at DESC)"
+                )
 
                 await conn.commit()
         except Exception as e:
@@ -285,6 +413,26 @@ class DBManager:
             messages.reverse()
             return messages
 
+    async def get_chat_log_before(
+        self, group_id: int, limit: int = 10, before_timestamp: Optional[str] = None
+    ) -> List[str]:
+        """获取指定群组在指定时间之前的聊天记录（用于并发安全的回复生成）"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            if before_timestamp:
+                await cursor.execute(
+                    "SELECT msg FROM chat_history WHERE group_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?",
+                    (group_id, before_timestamp, limit),
+                )
+            else:
+                await cursor.execute(
+                    "SELECT msg FROM chat_history WHERE group_id = ? ORDER BY timestamp DESC LIMIT ?", (group_id, limit)
+                )
+            rows = await cursor.fetchall()
+            messages = [row[0] for row in rows]
+            messages.reverse()
+            return messages
+
     async def get_new_message_count_since(self, group_id: int, since_timestamp: str) -> int:
         """获取自指定时间以来的新消息数量"""
         async with await self._get_connection() as conn:
@@ -300,16 +448,14 @@ class DBManager:
         """获取上次群氛围更新时间"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            await cursor.execute(
-                "SELECT updated_at FROM bot_personality WHERE group_id = ?", (group_id,)
-            )
+            await cursor.execute("SELECT updated_at FROM bot_personality WHERE group_id = ?", (group_id,))
             row = await cursor.fetchone()
             return row[0] if row else None
 
     async def should_update_vibe(self, group_id: int, min_messages: int = 100) -> tuple[bool, int, Optional[str]]:
         """
         判断是否应该更新群氛围
-        
+
         Returns:
             (should_update, message_count, last_update_time)
             - should_update: 是否应该更新
@@ -317,14 +463,14 @@ class DBManager:
             - last_update_time: 上次更新时间
         """
         last_update_time = await self.get_last_vibe_update_time(group_id)
-        
+
         if not last_update_time:
             # 从未更新过，应该更新
             return True, 0, None
-        
+
         # 计算自上次更新以来的新消息数量
         new_msg_count = await self.get_new_message_count_since(group_id, last_update_time)
-        
+
         should_update = new_msg_count >= min_messages
         return should_update, new_msg_count, last_update_time
 
@@ -351,9 +497,75 @@ class DBManager:
             await conn.commit()
 
     async def update_user_impression(self, group_id: int, user_id: int, user_name: str, impression: str):
-        """更新对某个用户的印象"""
+        """更新对某个用户的印象（智能合并 + 保留历史记录）"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
+
+            # 先查询是否已有旧印象
+            await cursor.execute(
+                "SELECT impression FROM user_profiles WHERE group_id = ? AND user_id = ?", (group_id, user_id)
+            )
+            row = await cursor.fetchone()
+
+            # 智能合并新印象与旧印象
+            if row and row[0]:
+                old_impression = row[0]
+                merged_impression = self._merge_impressions(old_impression, impression)
+
+                # 只有当合并后的印象确实发生变化时才保存历史
+                if merged_impression != old_impression:
+                    await cursor.execute(
+                        """
+                        INSERT INTO user_impression_history (group_id, user_id, user_name, impression, created_at)
+                        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        """,
+                        (group_id, user_id, user_name, old_impression),
+                    )
+
+                final_impression = merged_impression
+            else:
+                # 没有旧印象，直接使用新印象
+                final_impression = impression
+
+            # 更新当前印象
+            await cursor.execute(
+                """
+                INSERT INTO user_profiles (group_id, user_id, user_name, impression, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(group_id, user_id) DO UPDATE SET
+                user_name = excluded.user_name,
+                impression = excluded.impression,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+                (group_id, user_id, user_name, final_impression),
+            )
+            await conn.commit()
+
+    async def replace_user_impression(self, group_id: int, user_id: int, user_name: str, impression: str):
+        """
+        强制替换用户印象（不进行智能合并）
+        仅在需要完全重置印象时使用
+        """
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+
+            # 查询旧印象
+            await cursor.execute(
+                "SELECT impression FROM user_profiles WHERE group_id = ? AND user_id = ?", (group_id, user_id)
+            )
+            row = await cursor.fetchone()
+
+            # 如果存在旧印象且与新印象不同，保存到历史
+            if row and row[0] and row[0] != impression:
+                await cursor.execute(
+                    """
+                    INSERT INTO user_impression_history (group_id, user_id, user_name, impression, created_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    """,
+                    (group_id, user_id, user_name, row[0]),
+                )
+
+            # 直接替换印象
             await cursor.execute(
                 """
                 INSERT INTO user_profiles (group_id, user_id, user_name, impression, updated_at)
@@ -376,6 +588,67 @@ class DBManager:
             )
             row = await cursor.fetchone()
             return row[0] if row else None
+
+    async def get_user_impression_history(self, user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取某个用户的印象历史记录（跨群查询）"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                """
+                SELECT group_id, user_name, impression, created_at 
+                FROM user_impression_history 
+                WHERE user_id = ? 
+                ORDER BY created_at DESC 
+                LIMIT ?
+                """,
+                (user_id, limit),
+            )
+            rows = await cursor.fetchall()
+            return [
+                {"group_id": row[0], "user_name": row[1], "impression": row[2], "created_at": row[3]} for row in rows
+            ]
+
+    async def list_impression_history(
+        self,
+        group_id: Optional[int] = None,
+        user_id: Optional[int] = None,
+        keyword: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        """获取印象历史列表（支持分页、关键词搜索）"""
+        query = "SELECT id, group_id, user_id, user_name, impression, created_at FROM user_impression_history WHERE 1=1"
+        params: List[Any] = []
+
+        if group_id is not None:
+            query += " AND group_id = ?"
+            params.append(group_id)
+        if user_id is not None:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        if keyword:
+            query += " AND (impression LIKE ? OR user_name LIKE ?)"
+            like_keyword = f"%{keyword}%"
+            params.extend([like_keyword, like_keyword])
+
+        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(query, tuple(params))
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "group_id": row[1],
+                    "user_id": row[2],
+                    "user_name": row[3],
+                    "impression": row[4],
+                    "created_at": row[5],
+                }
+                for row in rows
+            ]
 
     async def add_user_specific_memory(self, group_id: int, user_id: int, user_name: str, content: str):
         """为特定用户增加一条具体记忆点"""
@@ -701,11 +974,11 @@ class DBManager:
                 VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 ON CONFLICT(group_id, user_id) DO UPDATE SET
                 user_name = excluded.user_name,
-                favorability = excluded.favorability,
-                status = excluded.status,
+                favorability = ?,
+                status = ?,
                 updated_at = CURRENT_TIMESTAMP
-            """,
-                (group_id, user_id, user_name, new_fav, new_status),
+                """,
+                (group_id, user_id, user_name, new_fav, new_status, new_fav, new_status),
             )
             await conn.commit()
         return {"favorability": new_fav, "status": new_status}

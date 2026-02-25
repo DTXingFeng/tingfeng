@@ -6,6 +6,7 @@ from typing import Optional, List
 
 class BasePersonalityConfig(BaseModel):
     """基础人格配置，Bot 的核心性格底色"""
+
     vibe: str = "活泼、有点小傲娇、偶尔吐槽"  # 基础氛围描述
     base_slang: List[str] = Field(default_factory=lambda: ["草", "乐", "绷不住了"])  # 基础通用黑话
     base_patterns: List[str] = Field(default_factory=lambda: ["捏", "的说"])  # 基础口癖
@@ -22,10 +23,11 @@ class BotConfig(BaseModel):
     reply_rate: float = 0.0  # 默认 0.0，强制艾特才回复
     interest_threshold: float = 0.6  # 兴趣评分阈值，AI 兴趣度需要达到此值才会回复（0.0-1.0）
     enable_mood: bool = True  # 是否启用心情系统
+    enable_schedule: bool = True  # 是否启用作息表系统（True=按作息表时间水群，False=全天候可水群）
     decision_interval: int = 60  # 决策间隔时间（秒）
     allowed_groups: List[int] = Field(default_factory=list)  # 白名单
     blocked_groups: List[int] = Field(default_factory=list)  # 黑名单
-    
+
     # 基础人格配置（新增）
     base_personality: BasePersonalityConfig = Field(default_factory=BasePersonalityConfig)
 

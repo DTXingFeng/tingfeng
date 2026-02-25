@@ -21,7 +21,7 @@ def _ensure_project_root_on_path() -> None:
 def main() -> None:
     """启动 Web UI"""
     _ensure_project_root_on_path()
-    uvicorn.run("src.webui.app:app", host="0.0.0.0", port=8765, reload=False)
+    uvicorn.run("src.webui.app:app", host="0.0.0.0", port=8765, reload=True)
 
 
 if __name__ == "__main__":

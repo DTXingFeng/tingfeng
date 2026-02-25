@@ -23,7 +23,8 @@ app.mount("/static", StaticFiles(directory="src/webui/static"), name="static")
 @app.get("/", response_class=HTMLResponse)
 async def index() -> HTMLResponse:
     """主页"""
-    return HTMLResponse("""<!DOCTYPE html>
+    return HTMLResponse(
+        """<!DOCTYPE html>
 <html lang=\"zh-CN\">
 <head>
   <meta charset=\"utf-8\" />
@@ -237,7 +238,10 @@ async def index() -> HTMLResponse:
                     <input id=\"impressionUserId\" placeholder=\"用户ID\" />
                     <input id=\"impressionUserName\" placeholder=\"用户名\" />
                   </div>
-                  <textarea id=\"impressionText\" rows=\"4\" placeholder=\"印象描述\"></textarea>
+                  <textarea id=\"impressionText\" rows=\"4\" placeholder=\"印象描述（支持增量更新）\"></textarea>
+                  <div class=\"helper\" style=\"margin-top: 8px; font-size: 12px;\">
+                    <strong>增量更新：</strong>+添加 -删除 ~旧|新 智能合并自动去重
+                  </div>
                   <div class=\"form-row\">
                     <button class=\"ghost\" onclick=\"App.loadImpression()\">加载</button>
                     <button class=\"primary\" onclick=\"App.saveImpression()\">保存</button>
@@ -364,9 +368,10 @@ async def index() -> HTMLResponse:
       <span>简单易用 · 本地运行</span>
     </footer>
   </div>
-  <script src=\"/static/app.js\"></script>
+  <script src="/static/app.js?v=2"></script>
  </body>
- </html>""")
+ </html>"""
+    )
 
 
 def _require_group_id(value: str) -> int:
@@ -573,6 +578,19 @@ async def get_impression(request: Request) -> Dict[str, Any]:
     return {"group_id": group_id, "user_id": user_id, "impression": impression or ""}
 
 
+@app.get("/api/user/impression/history")
+@handle_errors(default_return={"items": [], "error": "获取印象历史失败"}, log_level="ERROR")
+async def get_impression_history(request: Request) -> Dict[str, Any]:
+    """获取用户印象历史"""
+    user_id_raw = request.query_params.get("user_id", "")
+    if not user_id_raw.isdigit():
+        raise ValueError("用户ID无效")
+    user_id = int(user_id_raw)
+    limit = int(request.query_params.get("limit", "20"))
+    items = await db_manager.get_user_impression_history(user_id, limit=limit)
+    return {"items": items}
+
+
 @app.post("/api/user/impression")
 @handle_errors(default_return={"error": "更新用户印象失败"}, log_level="ERROR")
 async def update_impression(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -614,9 +632,25 @@ async def update_relationship(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not user_id_raw.isdigit():
         raise ValueError("用户ID无效")
     user_id = int(user_id_raw)
+
+    # 用户名可选：如果未提供，从现有记录获取
     user_name = str(payload.get("user_name", "")).strip()
     if not user_name:
-        raise ValueError("用户名不能为空")
+        # 从现有记录获取用户名
+        existing_data = await db_manager.get_user_relationship(group_id, user_id)
+        # 尝试从数据库获取用户名
+        async with await db_manager._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT user_name FROM user_relationships WHERE group_id = ? AND user_id = ?", (group_id, user_id)
+            )
+            row = await cursor.fetchone()
+            if row:
+                user_name = row[0]
+            else:
+                # 如果是新用户，使用用户ID作为默认用户名
+                user_name = str(user_id)
+
     delta_raw = str(payload.get("delta_favorability", "0")).strip() or "0"
     if not delta_raw.lstrip("-").isdigit():
         raise ValueError("好感度增量无效")

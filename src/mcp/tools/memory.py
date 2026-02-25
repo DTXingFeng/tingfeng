@@ -83,6 +83,9 @@ class GetUserMemoriesTool(BaseTool):
         # 获取用户印象（跨群查询）
         impression = await db_manager.get_user_impression_cross_group(group_id, user_id)
 
+        # 获取印象历史
+        impression_history = await db_manager.get_user_impression_history(user_id, limit=10)
+
         # 获取具体记忆点（跨群查询）
         memories = await db_manager.get_user_specific_memories_cross_group(group_id, user_id, limit=memory_limit)
 
@@ -93,6 +96,7 @@ class GetUserMemoriesTool(BaseTool):
             "user_name": user_name,
             "user_id": user_id,
             "impression": impression,
+            "impression_history": impression_history,
             "memories": memories,
             "relationship": relationship,
             "memory_count": len(memories),

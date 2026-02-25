@@ -14,6 +14,7 @@ from src.utils.logger import get_logger
 from src.utils.performance_monitor import ConcurrencyLimiter, RateLimiter
 from src.utils.timed_cache import GroupContextManager, DecisionStateTracker
 from typing import Optional
+from collections import deque
 import random
 import asyncio
 import time
@@ -56,6 +57,10 @@ last_wake_up_times = {}
 
 async def is_within_chat_time(group_id: int) -> bool:
     """检查当前时间是否在作息表的'水群'时间段内，或处于强行唤醒后的关注期内"""
+    # 如果作息表系统关闭，全天候可水群
+    if not bot_config.enable_schedule:
+        return True
+
     now = datetime.datetime.now()
 
     # 1. 检查是否处于“强行唤醒”后的关注期（默认 5 分钟）
@@ -89,8 +94,8 @@ async def is_within_chat_time(group_id: int) -> bool:
 last_decision_times = {}
 # 记录每个群是否有未被决策评估的消息
 pending_decisions = {}
-# 存储每个群组最新的上下文信息，用于延迟决策
-group_contexts = {}
+# 存储每个群组待处理的消息队列（用于并发安全的上下文管理）
+group_pending_contexts = {}
 # 记录正在运行的延迟决策任务
 active_deferred_tasks = {}
 # 记录每个群组是否正在进行 AI 决策，防止并发冲突
@@ -101,6 +106,8 @@ generating_reply_groups = set()
 last_slang_mining_times = {}
 # 黑话挖掘最小间隔时间（秒）
 SLANG_MINING_INTERVAL = 300  # 5分钟
+# 每个群组队列的最大长度（防止内存溢出）
+MAX_PENDING_CONTEXTS = 50
 
 
 async def process_my_logic(
@@ -120,6 +127,7 @@ async def process_my_logic(
     role: str,
     raw_msg: any,
     reply_message_id: Optional[int] = None,
+    message_timestamp: Optional[str] = None,
 ):
     """
     处理消息回复逻辑
@@ -144,7 +152,13 @@ async def process_my_logic(
             processed_messages.update(old_list[-5000:])
 
         reply_data = await get_chat_reply(
-            group_id, card, llm_text, user_id=user_id, reply_message_id=reply_message_id, bot=bot
+            group_id,
+            card,
+            llm_text,
+            user_id=user_id,
+            reply_message_id=reply_message_id,
+            bot=bot,
+            message_timestamp=message_timestamp,
         )
         reply_text = reply_data.get("text")
         sticker_url = reply_data.get("sticker")
@@ -237,6 +251,7 @@ async def process_my_logic(
 async def deferred_decision_worker(group_id: int, bot: Bot):
     """
     延迟决策工人：等待冷却期结束并执行决策
+    使用队列机制确保每个消息独立处理，防止并发竞态
     """
     try:
         while True:
@@ -252,7 +267,11 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                     and group_id not in deciding_groups
                     and group_id not in generating_reply_groups
                 ):
-                    ctx = group_contexts.get(group_id)
+                    # 从队列中获取最早的消息上下文（FIFO）
+                    ctx = None
+                    if group_id in group_pending_contexts and group_pending_contexts[group_id]:
+                        ctx = group_pending_contexts[group_id][0]  # 查看队首元素但不移除
+
                     if ctx:
                         # 标记为已处理，防止重复触发
                         pending_decisions[group_id] = False
@@ -284,6 +303,10 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                 await db_manager.record_bot_reply(
                                     group_id, ctx["display_name"], is_at_bot=False, interest_score=interest_score
                                 )
+                                # 从队列中移除已处理的消息
+                                if group_id in group_pending_contexts and group_pending_contexts[group_id]:
+                                    group_pending_contexts[group_id].popleft()
+
                                 # 执行回复逻辑
                                 selected_user = decision.get("selected_user", ctx["display_name"])  # 选定消息的发送者
                                 target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
@@ -305,12 +328,17 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     role=ctx["role"],
                                     raw_msg=ctx["raw_msg"],
                                     reply_message_id=ctx.get("reply_message_id"),  # 传递引用消息 ID
+                                    message_timestamp=ctx.get("timestamp"),  # 传递时间戳
                                 )
                             # 即使 AI 决定不回复，也有一定概率随机回复
                             elif random.random() < bot_config.reply_rate:
                                 await db_manager.record_bot_reply(
                                     group_id, ctx["display_name"], is_at_bot=False, interest_score=0.2
                                 )
+                                # 从队列中移除已处理的消息
+                                if group_id in group_pending_contexts and group_pending_contexts[group_id]:
+                                    group_pending_contexts[group_id].popleft()
+
                                 await process_my_logic(
                                     bot=bot,
                                     event=ctx["event"],
@@ -327,20 +355,43 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     card=ctx["display_name"],
                                     role=ctx["role"],
                                     raw_msg=ctx["raw_msg"],
-                                    reply_message_id=ctx.get("reply_message_id"),  # 传递引用消息 ID
+                                    reply_message_id=ctx.get("reply_message_id"),
+                                    message_timestamp=ctx.get("timestamp"),
                                 )
+                            else:
+                                # AI 决定不回复，从队列中移除该消息
+                                if group_id in group_pending_contexts and group_pending_contexts[group_id]:
+                                    group_pending_contexts[group_id].popleft()
                         finally:
                             deciding_groups.remove(group_id)
+                else:
+                    # 队列为空或正在处理，等待下次检查
+                    pass
+            else:
+                # 还在冷却期，等待剩余时间
+                await asyncio.sleep(min(remaining, 1.0))
+
+                # 如果队列为空，退出延迟决策任务
+                if group_id in group_pending_contexts and len(group_pending_contexts[group_id]) == 0:
+                    break
+
+                continue
+
+            # 检查队列是否为空，为空则退出
+            if group_id in group_pending_contexts and len(group_pending_contexts[group_id]) == 0:
                 break
 
-            # 每隔一小段时间检查一次，或者直接睡完剩余时间
-            await asyncio.sleep(max(remaining, 0.5))
+            # 短暂休眠避免 CPU 占用
+            await asyncio.sleep(0.1)
+
     except asyncio.CancelledError:
-        pass
+        logger.debug(f"群组 {group_id} 的延迟决策任务被取消")
     except Exception as e:
-        print(f"延迟决策任务出错: {e}")
+        logger.opt(exception=True).error(f"群组 {group_id} 的延迟决策任务发生异常: {e}")
     finally:
-        active_deferred_tasks.pop(group_id, None)
+        # 清理任务记录
+        if group_id in active_deferred_tasks:
+            del active_deferred_tasks[group_id]
 
 
 # 创建一个响应所有消息的响应器
@@ -463,13 +514,19 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
     asyncio.create_task(create_limited_task(store_and_consolidate()))
 
+    # 获取当前消息时间戳（用于历史记录过滤）
+    current_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     # 7. 唤醒逻辑判断
     is_at_me = "@self" in llm_text or event.is_tome()
     is_mentioned = bot_config.bot_name in message_text
     is_actively_engaged = is_at_me or is_mentioned
 
-    # 更新群组最新的上下文，用于可能的延迟决策
-    group_contexts[group_id] = {
+    # 将当前消息上下文加入待处理队列（用于并发安全的延迟决策）
+    if group_id not in group_pending_contexts:
+        group_pending_contexts[group_id] = deque(maxlen=MAX_PENDING_CONTEXTS)
+
+    message_context = {
         "bot": bot,
         "event": event,
         "message_id": message_id,
@@ -485,7 +542,9 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         "role": role,
         "raw_msg": raw_message,
         "reply_message_id": reply_message_id,
+        "timestamp": current_timestamp,
     }
+    group_pending_contexts[group_id].append(message_context)
 
     do_reply = False
     target_user = display_name
@@ -603,4 +662,5 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         role=role,
         raw_msg=raw_message,
         reply_message_id=reply_message_id,  # 传递引用消息 ID
+        message_timestamp=current_timestamp,  # 传递时间戳用于历史记录过滤
     )
