@@ -244,7 +244,8 @@ class DBManager:
                         traits TEXT,
                         recent_thoughts TEXT,
                         style_vibe TEXT,
-                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        last_vibe_update DATETIME
                     )
                 """
                 )
@@ -448,7 +449,7 @@ class DBManager:
         """获取上次群氛围更新时间"""
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            await cursor.execute("SELECT updated_at FROM bot_personality WHERE group_id = ?", (group_id,))
+            await cursor.execute("SELECT last_vibe_update FROM bot_personality WHERE group_id = ?", (group_id,))
             row = await cursor.fetchone()
             return row[0] if row else None
 
@@ -915,18 +916,35 @@ class DBManager:
 
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            await cursor.execute(
-                """
-                INSERT INTO bot_personality (group_id, traits, recent_thoughts, style_vibe, updated_at)
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(group_id) DO UPDATE SET
-                traits = excluded.traits,
-                recent_thoughts = excluded.recent_thoughts,
-                style_vibe = excluded.style_vibe,
-                updated_at = CURRENT_TIMESTAMP
-            """,
-                (group_id, new_traits, new_thoughts, new_vibe),
-            )
+
+            # 如果更新了 style_vibe，同时更新 last_vibe_update
+            if vibe is not None:
+                await cursor.execute(
+                    """
+                    INSERT INTO bot_personality (group_id, traits, recent_thoughts, style_vibe, updated_at, last_vibe_update)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    ON CONFLICT(group_id) DO UPDATE SET
+                    traits = excluded.traits,
+                    recent_thoughts = excluded.recent_thoughts,
+                    style_vibe = excluded.style_vibe,
+                    updated_at = CURRENT_TIMESTAMP,
+                    last_vibe_update = CURRENT_TIMESTAMP
+                """,
+                    (group_id, new_traits, new_thoughts, new_vibe),
+                )
+            else:
+                await cursor.execute(
+                    """
+                    INSERT INTO bot_personality (group_id, traits, recent_thoughts, style_vibe, updated_at)
+                    VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(group_id) DO UPDATE SET
+                    traits = excluded.traits,
+                    recent_thoughts = excluded.recent_thoughts,
+                    style_vibe = excluded.style_vibe,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                    (group_id, new_traits, new_thoughts, new_vibe),
+                )
             await conn.commit()
 
     async def get_user_relationship(self, group_id: int, user_id: int) -> Dict[str, Any]:

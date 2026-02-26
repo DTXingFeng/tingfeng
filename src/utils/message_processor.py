@@ -24,47 +24,28 @@ FACE_MAP = {
 }
 
 
-def split_text_to_segments(text: str, max_len: int = 30) -> List[str]:
+def split_text_to_segments(text: str, max_segments: int = 5) -> List[str]:
     """
-    将文本拆分为多个自然段落，用于分段发送。
-    优先按换行符拆分，其次按句末标点拆分，最后按长度拆分。
+    将文本按换行符拆分为多个段落，用于分段发送。
+    AI 主动决定是否分段（通过换行符），代码不做强制截断。
+
+    Args:
+        text: 待拆分的文本
+        max_segments: 最大段数（防止刷屏）
     """
     if not text:
         return []
 
-    # 1. 首先按换行符拆分
-    lines = [line.strip() for line in text.split("\n") if line.strip()]
-    segments = []
+    # 只按换行符分段，保留AI的主动分段意图
+    segments = [line.strip() for line in text.split("\n") if line.strip()]
 
-    for line in lines:
-        if len(line) <= max_len:
-            segments.append(line)
-        else:
-            # 2. 如果一行太长，按句末标点拆分
-            # 匹配 。！？! ? ... 以及空格，模拟群聊断句
-            sub_parts = re.split(r"([。！？!?\s]+|[\.]{3,})", line)
+    # 限制最大段数（防止AI输出太多换行导致刷屏）
+    if len(segments) > max_segments:
+        # 超出限制时，保留前 max_segments-1 段，剩余的合并为最后一段
+        merged = "".join(segments[max_segments - 1 :])
+        segments = segments[: max_segments - 1] + [merged]
 
-            current_seg = ""
-            for i in range(0, len(sub_parts), 2):
-                part = sub_parts[i]
-                punc = sub_parts[i + 1] if i + 1 < len(sub_parts) else ""
-
-                # 如果当前段加上新部分超过长度，先存入当前段
-                if current_seg and len(current_seg) + len(part) + len(punc) > max_len:
-                    segments.append(current_seg.strip())
-                    current_seg = part + punc
-                else:
-                    current_seg += part + punc
-
-                # 如果单部分就已经超长了，强制截断（虽然群聊很少见，但做个保底）
-                while len(current_seg) > max_len:
-                    segments.append(current_seg[:max_len].strip())
-                    current_seg = current_seg[max_len:]
-
-            if current_seg:
-                segments.append(current_seg.strip())
-
-    return [s for s in segments if s]
+    return segments
 
 
 async def get_message_abstract(bot: Bot, message_id: int) -> str:

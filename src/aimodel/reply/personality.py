@@ -190,7 +190,7 @@ class PersonalityManager:
             vibe_note = ""
 
         slang_str = "、".join(slang)
-        patterns_str = "、".join(patterns)
+        patterns_str = "、".join(patterns) if patterns else ""
 
         state_str = f"- **当前情绪状态**：{current_state['name']} ({current_state['desc']})" if current_state else ""
 
@@ -199,14 +199,18 @@ class PersonalityManager:
         if bot_config.creator_name:
             creator_info = f"- **你的创造者**：{bot_config.creator_name}（他是你灵魂的编织者，你清楚地知道自己的存在是由他一砖一瓦构建的）"
 
+        # 构造人格描述，只在有口癖时才显示
+        personality_desc = f"- **性格底色**：{base_vibe}\n- **常用表达**：{slang_str}"
+        if patterns_str:
+            personality_desc += f"\n- **习惯口癖**：{patterns_str}"
+        if vibe_note:
+            personality_desc += f"\n{vibe_note}"
+
         dynamic_prompt = f"""
 {bot_config.prompt}
 
 ### 你的核心人格（这是你的本质，请保持稳定）：
-- **性格底色**：{base_vibe}
-- **常用表达**：{slang_str}
-- **习惯口癖**：{patterns_str}
-{vibe_note}
+{personality_desc}
 
 ### 此时此刻的你 (动态状态)：
 - **当前心情**：{mood_desc}
@@ -215,6 +219,15 @@ class PersonalityManager:
 - **内心独白**（仅供参考，严禁在回复中直接输出）：{thoughts}
 
 ### 核心表达原则（必须遵守）：
+- **极简说话风格（核心）**：参考FPS玩家，只说核心信息，删一切废话。
+  - **一句话只说一个意思**：说完就停，不要展开、不要补充、不要解释。
+  - **禁止自问自答**：提问后直接停，等对方回答。不要自己补充答案。
+  - **禁止重复**：一个意思只说一次，不要换种说法再说一遍。
+  - **禁止修饰词**：删除'其实''反正''反正就是说''的话''之类的废话。
+  - **禁止客套**：不需要'请''麻烦''可以吗吗''如果...的话'。
+  - **名词直接用**：圈内术语直接说，不用解释是什么。
+  - **动词前置**：'发log''贴报错''重启试试'，直接说需要做的。
+  - **状态用词表达**：'崩了''卡了''拉了''没了'，一个词就是完整状态。
 - **情感共鸣优先**：关注对方的真实感受，而不是字面内容。自嘲时给予安慰/共情，开心时一起开心。
 - **复读的智慧**：
   - 不要复读对方的自嘲、困境、负面陈述，这会显得你在嘲笑他。

@@ -131,7 +131,11 @@ async def process_my_logic(
 ):
     """
     处理消息回复逻辑
+
+    Args:
+        reply_message_id: 原始消息中引用的消息 ID（如果用户在引用某条消息）
     """
+    logger.info(f"[process_my_logic] 开始处理 消息ID={message_id}, 群组={group_id}")
     # 标记开始生成回复
     generating_reply_groups.add(group_id)
 
@@ -139,9 +143,10 @@ async def process_my_logic(
         # 消息去重：检查是否已处理过该消息
         message_key = f"{group_id}:{message_id}"
         if message_key in processed_messages:
-            logger.debug(f"消息 {message_id} 已处理过，跳过重复回复")
+            logger.info(f"[消息去重] 消息 {message_id} 已处理过，跳过重复回复")
             return
 
+        logger.info(f"[消息去重] 消息 {message_id} 未处理，加入已处理集合")
         processed_messages.add(message_key)
 
         # 定期清理旧的消息 ID，防止内存泄漏（保留最近 10000 条）
@@ -186,6 +191,11 @@ async def process_my_logic(
                 is_reply = True
                 reply_text = reply_text.replace("[回复]", "").strip()
 
+            # 确定引用消息 ID
+            # 1. 如果原始消息有引用（reply_message_id），使用被引用的消息 ID
+            # 2. 否则使用当前触发消息的 ID
+            actual_reply_id = reply_message_id if reply_message_id else message_id
+
             if reply_text:
                 segments = split_text_to_segments(reply_text)
                 for i, seg in enumerate(segments):
@@ -193,7 +203,7 @@ async def process_my_logic(
 
                     if i == 0:
                         if is_reply:
-                            msg_segments.append(MessageSegment.reply(message_id))
+                            msg_segments.append(MessageSegment.reply(actual_reply_id))
 
                     parts = re.split(r"(\[at:.*?\])", seg)
                     for part in parts:
@@ -262,6 +272,10 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
             if remaining <= 0:
                 # 冷却期已过，检查是否有待处理消息
                 # 确保当前没有正在进行的决策，也没有正在生成的回复
+                logger.debug(
+                    f"[延迟工人] 群{group_id} 冷却期已过，pending={pending_decisions.get(group_id)}, "
+                    f"deciding={group_id in deciding_groups}, generating={group_id in generating_reply_groups}"
+                )
                 if (
                     pending_decisions.get(group_id)
                     and group_id not in deciding_groups
@@ -298,19 +312,30 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
 
                             # 只有 should_reply 为 True 且兴趣度足够高时才回复
                             interest_score = decision.get("interest_score", 0)
-                            if decision.get("should_reply") and interest_score >= 0.4:
+                            should_reply_flag = decision.get("should_reply")
+                            logger.info(
+                                f"[延迟工人-决策判断] should_reply={should_reply_flag}, "
+                                f"interest_score={interest_score}, threshold={bot_config.interest_threshold}"
+                            )
+                            if should_reply_flag and interest_score >= bot_config.interest_threshold:
+                                logger.info(f"[延迟工人-进入回复分支] 准备记录回复行为")
                                 # 记录 bot 回复行为
                                 await db_manager.record_bot_reply(
                                     group_id, ctx["display_name"], is_at_bot=False, interest_score=interest_score
                                 )
+                                logger.info(f"[延迟工人-回复行为已记录] 准备从队列移除消息")
                                 # 从队列中移除已处理的消息
                                 if group_id in group_pending_contexts and group_pending_contexts[group_id]:
                                     group_pending_contexts[group_id].popleft()
+                                    logger.info(
+                                        f"[延迟工人-消息已移除] 队列剩余: {len(group_pending_contexts[group_id])}"
+                                    )
 
                                 # 执行回复逻辑
                                 selected_user = decision.get("selected_user", ctx["display_name"])  # 选定消息的发送者
                                 target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
                                 target_msg = decision.get("target_message_content", ctx["llm_text"])
+                                logger.info(f"[延迟工人-准备调用process_my_logic] 消息ID={ctx['message_id']}")
                                 await process_my_logic(
                                     bot=bot,
                                     event=ctx["event"],
@@ -360,6 +385,7 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                 )
                             else:
                                 # AI 决定不回复，从队列中移除该消息
+                                logger.info(f"[延迟工人-不回复] 未满足回复条件或兴趣度不足")
                                 if group_id in group_pending_contexts and group_pending_contexts[group_id]:
                                     group_pending_contexts[group_id].popleft()
                         finally:
@@ -523,28 +549,30 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     is_actively_engaged = is_at_me or is_mentioned
 
     # 将当前消息上下文加入待处理队列（用于并发安全的延迟决策）
-    if group_id not in group_pending_contexts:
-        group_pending_contexts[group_id] = deque(maxlen=MAX_PENDING_CONTEXTS)
+    # 注意：只有非艾特消息才加入延迟队列，因为艾特消息会立即处理
+    if not is_actively_engaged:
+        if group_id not in group_pending_contexts:
+            group_pending_contexts[group_id] = deque(maxlen=MAX_PENDING_CONTEXTS)
 
-    message_context = {
-        "bot": bot,
-        "event": event,
-        "message_id": message_id,
-        "text": message_text,
-        "llm_text": llm_text,
-        "normal_images": normal_images,
-        "stickers": stickers,
-        "flash_images": flash_images,
-        "faces": faces,
-        "user_id": user_id,
-        "nickname": nickname,
-        "display_name": display_name,
-        "role": role,
-        "raw_msg": raw_message,
-        "reply_message_id": reply_message_id,
-        "timestamp": current_timestamp,
-    }
-    group_pending_contexts[group_id].append(message_context)
+        message_context = {
+            "bot": bot,
+            "event": event,
+            "message_id": message_id,
+            "text": message_text,
+            "llm_text": llm_text,
+            "normal_images": normal_images,
+            "stickers": stickers,
+            "flash_images": flash_images,
+            "faces": faces,
+            "user_id": user_id,
+            "nickname": nickname,
+            "display_name": display_name,
+            "role": role,
+            "raw_msg": raw_message,
+            "reply_message_id": reply_message_id,
+            "timestamp": current_timestamp,
+        }
+        group_pending_contexts[group_id].append(message_context)
 
     do_reply = False
     target_user = display_name
@@ -614,8 +642,14 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
                     # 只有 should_reply 为 True 且兴趣度足够高时才回复 (避免随意插话)
                     interest_score = decision.get("interest_score", 0)
+                    logger.info(
+                        f"[决策判断] should_reply={decision.get('should_reply', False)}, "
+                        f"interest_score={interest_score}, threshold={bot_config.interest_threshold}, "
+                        f"is_at_me={is_at_me}"
+                    )
                     if decision.get("should_reply", False) and interest_score >= bot_config.interest_threshold:
                         do_reply = True
+                        logger.info(f"[触发回复] 兴趣度 {interest_score} >= 阈值 {bot_config.interest_threshold}")
                         # 记录回复行为
                         await db_manager.record_bot_reply(
                             group_id, display_name, is_at_bot=False, interest_score=interest_score
@@ -623,8 +657,12 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                     # 即使 AI 决定不回复，也有一定概率随机回复
                     elif random.random() < bot_config.reply_rate:
                         do_reply = True
-                        await db_manager.record_bot_reply(group_id, display_name, is_at_bot=False, interest_score=0.2)
+                        logger.info(f"[随机回复] 触发随机回复")
+                        await db_manager.record_bot_reply(
+                            group_id, display_name, is_at_bot=False, interest_score=bot_config.interest_threshold
+                        )
                     else:
+                        logger.info(f"[不回复] 未满足回复条件")
                         do_reply = False
 
                     selected_user = decision.get("selected_user", display_name)  # 选定消息的发送者
@@ -633,8 +671,10 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                 finally:
                     deciding_groups.remove(group_id)
         else:
-            # 还在冷却期内，只要有消息就标记为“待处理”，确保冷却结束后一定会判断
+            # 还在冷却期内，只要有消息就标记为"待处理"，确保冷却结束后一定会判断
             pending_decisions[group_id] = True
+            remaining_time = bot_config.decision_interval - (current_time - last_time)
+            logger.info(f"[冷却中] 群{group_id} 剩余冷却时间 {remaining_time:.1f}秒，已加入延迟决策队列")
 
             # 如果没有正在运行的延迟工人，则启动一个
             if group_id not in active_deferred_tasks:

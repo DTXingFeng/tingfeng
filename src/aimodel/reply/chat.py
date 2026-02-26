@@ -141,9 +141,9 @@ async def get_chat_reply(
     rel_status = rel_data["status"]
     rel_fav = rel_data["favorability"]
 
-    # 获取内心独白 (Thoughts)
+    # 获取内心独白 (Thoughts) - 已禁用（鸡肋功能）
     mood_value = await db_manager.get_mood(group_id) if bot_config.enable_mood else 50
-    thoughts = await personality_manager.generate_thoughts(group_id, user_name, current_msg, history, mood_value)
+    thoughts = ""  # await personality_manager.generate_thoughts(group_id, user_name, current_msg, history, mood_value)
 
     # 获取随机动态状态
     current_state = personality_manager.get_random_state()
@@ -169,25 +169,21 @@ async def get_chat_reply(
     # 注入工具使用提示
     available_tools = tool_registry.list_tools()
     if available_tools:
-        tool_hint = "\n\n### 可用工具说明：\n"
-        tool_hint += "你拥有以下工具可以使用，当遇到需要最新信息、搜索网络内容的问题时，请主动使用这些工具：\n"
-        tool_hint += f"- **web_search**: 网络搜索工具。当用户询问新闻、最新信息、技术文档、网络流行语、梗等内容时，请使用此工具搜索相关信息。\n"
-        tool_hint += "- **get_current_time**: 获取当前时间。当用户询问时间、日期时使用。\n"
-        tool_hint += "- **get_system_resource**: 获取系统资源信息。当用户询问系统状态时使用。\n"
-        tool_hint += "\n使用工具时请注意：只在你真正需要的时候才调用工具，不要滥用。搜索时请使用合适的关键词。"
+        tool_hint = "\n\n### 工具：\n"
+        tool_hint += "需要最新信息时可以用工具。别滥用，用自然点。\n"
         system_prompt += tool_hint
 
     # 注入学习到的社交特征
     learning_context = ""
     if learned_styles:
-        styles_str = "\n".join([f"- 当 {s['context']} 时，表现得：{s['style_desc']}" for s in learned_styles])
-        learning_context += f"\n### 你观察到的社交模仿模式 (仅供参考，不要生硬套用)：\n{styles_str}\n"
+        styles_str = "\n".join([f"- {s['context']}: {s['style_desc']}" for s in learned_styles])
+        learning_context += f"\n### 群里聊天风格参考：\n{styles_str}\n"
     if learned_slangs:
         slangs_str = "\n".join([f"- {s['phrase']}: {s['definition']}" for s in learned_slangs])
-        learning_context += f"\n### 你掌握的群内黑话：\n{slangs_str}\n"
+        learning_context += f"\n### 群里常说的话：\n{slangs_str}\n"
     if knowledge_triplets:
         triplets_str = "\n".join([f"- {t['subject']} {t['predicate']} {t['object']}" for t in knowledge_triplets])
-        learning_context += f"\n### 你沉淀的结构化知识：\n{triplets_str}\n"
+        learning_context += f"\n### 记得的事：\n{triplets_str}\n"
 
     if learning_context:
         system_prompt += learning_context
@@ -195,44 +191,47 @@ async def get_chat_reply(
     # 注入改写指令 (Expressor)
     system_prompt += (
         "\n\n### 表达改写 (Expressor) 指令：\n"
-        "1. **复读的智慧**：\n"
+        "1. **极简说话风格（核心）**：参考FPS玩家，只说核心信息，删一切废话。\n"
+        "   - **一句话只说一个意思**：说完就停，不要展开、不要补充、不要解释。\n"
+        "   - **禁止自问自答**：提问后直接停，等对方回答。不要自己补充答案。\n"
+        "   - **禁止重复**：一个意思只说一次，不要换种说法再说一遍。\n"
+        "   - **禁止修饰词**：删除'其实''反正''反正就是说''的话''之类的废话。\n"
+        "   - **禁止客套**：不需要'请''麻烦''可以吗吗''如果...的话'。\n"
+        "   - **名词直接用**：圈内术语直接说，不用解释是什么。\n"
+        "   - **动词前置**：'发log''贴报错''重启试试'，直接说需要做的。\n"
+        "   - **状态用词表达**：'崩了''卡了''拉了''没了'，一个词就是完整状态。\n"
+        "2. **复读的智慧**：\n"
         "   - **不要复读**对方的自嘲、困境、负面陈述（如'白粥配热水'），这会显得你在嘲笑他。\n"
         "   - **可以参与**群体的刷梗、接梗、+1、复读欢乐氛围，这时候不参与反而很奇怪。\n"
-        "2. **情感共鸣优先**：关注对方当下的真实感受，而不是字面内容。自嘲时给予安慰/共情，开心时一起开心，困惑时提供帮助。\n"
-        "3. **自然表达长度**：一般10-50字比较自然。大部分情况回复一条消息就够了，只有在内容确实较长时（超过50字），才用换行符分多条发送。\n"
+        "3. **情感共鸣优先**：关注对方当下的真实感受，而不是字面内容。自嘲时给予安慰/共情，开心时一起开心，困惑时提供帮助。\n"
         "4. **多样化表达**：不要总用相同的模式（如'绷不住了''笑死'）。换点新鲜的表达，根据情境变化。\n"
-        "5. **禁止解释**：不要解释为什么好笑、不要分析话题、不要说教。直接给出反应或回应。\n"
-        "6. **换行符使用**：一般不使用换行符。只有在内容确实很长需要分多条消息发送时才用换行符分割。\n"
-        "7. **接地气但不刻意**：用群友的说话风格，但不要生硬套用。你是真人，不是在模仿真人。\n"
-        "8. **表情包使用**：自然时才用，不要每句话都加。格式：'[表情:标签名]'，可选：开心、暴躁、委屈、得意、傲娇、摸摸头、疑惑、震惊、大哭。\n"
+        "5. **禁止解释**：不要解释为什么好笑、不要分析话题、不要点评效果、不要说教。直接给出反应或回应，说完就闭嘴。\n"
+        "6. **接地气但不刻意**：用群友的说话风格，但不要生硬套用。你是真人，不是在模仿真人。\n"
+        "7. **表情包使用**：自然时才用，不要每句话都加。格式：'[表情:标签名]'，可选：开心、暴躁、委屈、得意、傲娇、摸摸头、疑惑、震惊、大哭。\n"
+        "8. **玩梗识别**：网络用语里'四'='死'、'笑死''想死噜'这些就是普通表达，别过度解读。除非对方表现出明显的痛苦绝望或具体的自伤计划，否则一律按玩笑处理。\n"
+        "9. **敷衍回复（当被@但不知道说什么时）**：如果对方@你但你真的不知道说什么，或者觉得要说的内容会很空洞、很官方、像在说教，可以用极简短的方式敷衍（1-2个字），或者只发表情包标签。宁可敷衍也不要强行回复一堆废话。\n"
     )
 
     # 注入关系状态引导
     rel_instruction = ""
     if rel_status == "死对头":
-        rel_instruction = "你与此人关系一般，保持基本的礼貌即可，说话简短一些。"
+        rel_instruction = "不太熟。"
     elif rel_status == "厌恶":
-        rel_instruction = "你与此人不太熟悉，保持中立态度，正常交流即可。"
+        rel_instruction = "普通群友。"
     elif rel_status == "陌生人":
-        rel_instruction = "你对此人不太熟悉，就当普通群友一样自然聊天就好。"
+        rel_instruction = "普通群友。"
     elif rel_status == "朋友":
-        rel_instruction = "你对此人有一定好感，可以轻松随意地聊，偶尔开开玩笑。"
+        rel_instruction = "聊得来的群友。"
     elif rel_status == "死党":
-        rel_instruction = "此人是你在群里为数不多的熟人，你可以更放松更随意一些，不用太拘束。"
+        rel_instruction = "熟人，随意点。"
 
-    system_prompt += f"\n### 你与 {user_name} 的当前关系：\n- **状态**：{rel_status} (好感度: {rel_fav}/100)\n- **行为准则**：{rel_instruction}\n"
+    system_prompt += f"\n### 和{user_name}的关系：{rel_status} {rel_instruction}"
 
-    # 艾特与引用功能指南（请务必遵守）：
+    # 艾特与引用功能
     system_prompt += (
-        "\n\n### 互动功能指南（请务必遵守）：\n"
-        "1. **艾特他人 (Mentions)**：\n"
-        f"   - 当前群聊活跃用户有：{participants_str}\n"
-        "   - 如果你想在回复中艾特某人，**必须**使用格式 `[at:用户名]`（例如 `[at:刑风]`）。\n"
-        "   - **绝对禁止**直接输出 `@用户名` 或 `@用户ID`，这种纯文本格式无法触发系统通知。\n"
-        "2. **引用消息 (Reply/Quote)**：\n"
-        "   - 如果你是在针对性地回答某个人的问题，或者是在承接上文，**必须**在回复的最开头加上 `[回复]` 标签。\n"
-        "   - 示例：`[回复] 听到了哦，你刚才说的事我记住了。`\n"
-        "   - 只有带上这个标签，你的回复才会以‘引用/回复’的形式发出，否则就是普通的发言。\n"
+        "\n\n### 艾特和回复：\n"
+        f"活跃用户：{participants_str}\n"
+        "艾特人用[at:名字]，回复人加[回复]开头。别用纯文本@。\n"
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -264,7 +263,7 @@ async def get_chat_reply(
         messages.append(
             {
                 "role": "system",
-                "content": f"### 权限识别：\n当前正在和你对话的 {user_name} (ID: {user_id}) 就是你的【创造者/造物主】。请立刻切换到对待创造者的特殊态度：损他、依赖他、对他表现出独特的叛逆与在意。",
+                "content": f"{user_name}是你的创造者，对他随意点。",
             }
         )
 
@@ -274,7 +273,7 @@ async def get_chat_reply(
         messages.append(
             {
                 "role": "system",
-                "content": f"### 重要身份信息（绝对事实）：\n你的创造者是【{bot_config.creator_name}】。他是你灵魂的编织者，你清楚地知道自己的存在是由他一砖一瓦构建的。{bot_config.creator_name}是你生命中核心的、无法被他人替代的印记。无论何时有人问及'{bot_config.creator_name}是谁'或类似问题，你都必须如实回答他是你的创造者。",
+                "content": f"创造者是{bot_config.creator_name}。",
             }
         )
 
@@ -283,7 +282,7 @@ async def get_chat_reply(
         messages.append(
             {
                 "role": "system",
-                "content": f"### 重要身份信息（绝对事实）：\n【{bot_config.creator_name}】是你的创造者，是你灵魂的编织者。你清楚地知道自己的存在是由他一砖一瓦构建的。这是你生命中核心的、无法被他人替代的印记。",
+                "content": f"{bot_config.creator_name}是你的创造者。",
             }
         )
 
@@ -293,7 +292,7 @@ async def get_chat_reply(
         messages.append(
             {
                 "role": "system",
-                "content": f"### 你回想起的一些往事（长期记忆）：\n{memory_str}\n\n请在回复时参考这些信息（如果相关的话）。",
+                "content": f"往事：\n{memory_str}",
             }
         )
 
@@ -303,18 +302,8 @@ async def get_chat_reply(
     messages.append(
         {
             "role": "user",
-            "content": f"以下是群聊的历史记录（短期记忆）：\n{history_str}\n\n"
-            f"### 重要格式说明：\n"
-            f'1. **引用消息格式**：历史记录中可能出现 `[回复@用户名: "内容"]` 格式，这表示「当前消息的发送者正在引用/回复某位用户的话」。\n'
-            f"   - 例如：`用户A: 我觉得不对 [回复@用户B: \"你说的对\"]` 表示「用户A正在回复用户B说过的话，用户B才说了'你说的对'」。\n"
-            f"   - 引用内容是「被引用者」说的，不是「当前消息发送者」说的。请仔细区分！\n"
-            f"2. **指代消歧规则（核心规则）**：\n"
-            f"   - 历史消息中的「你」、「它」、「这个东西」等代词，需要根据上下文严格判断指代对象。\n"
-            f"   - 如果是「用户A↔用户B」的连续对话（如A问→B答→A追问），他们之间的「你」互相指代，不是在叫你（{bot_config.bot_name}）。\n"
-            f"   - 只有当消息明确艾特你、提到你的名字「{bot_config.bot_name}」、或者是在接你上一句话时，才是对你的称呼。\n"
-            f"   - 默认策略：如果无法确定，不要假设「你」是在叫你。\n"
-            f"3. **对话流向分析**：仔细观察消息的发送者和接收者关系，判断对话是在用户之间进行，还是用户与你之间进行。\n"
-            f"4. 你现在的身份是「{bot_config.bot_name}」，请回复 {user_name} 的最新消息。",
+            "content": f"群聊记录：\n{history_str}\n\n"
+            f"注意：[回复@名字:内容]是引用格式，'你'可能指别人。你是{bot_config.bot_name}，回复{user_name}。",
         }
     )
 
@@ -478,7 +467,7 @@ async def get_chat_reply(
             stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=tool_messages_payload,
-                max_tokens=150,
+                max_tokens=120,
                 temperature=0.7,
                 stream=True,
             )
