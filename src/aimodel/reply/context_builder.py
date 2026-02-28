@@ -50,7 +50,7 @@ class ReplyContextBuilder:
             from src.aimodel.memory.embeddings import get_embeddings
             from src.aimodel.memory.vector_db import vector_db
 
-            context["history"] = await db_manager.get_chat_log(group_id, limit=20)
+            context["history"] = await db_manager.get_chat_log(group_id, limit=30)
             context["user_profile"] = (
                 await db_manager.get_user_impression_cross_group(group_id, user_id) if user_id else None
             )
@@ -69,8 +69,11 @@ class ReplyContextBuilder:
             context["mood_value"] = await db_manager.get_mood(group_id) if bot_config.enable_mood else 50
             context["mood_desc"] = self._get_mood_description(context["mood_value"])
 
+            # 提取历史消息文本（用于传递给需要字符串列表的函数）
+            history_messages = [entry["message"] for entry in context["history"]]
+
             context["thoughts"] = await personality_manager.generate_thoughts(
-                group_id, user_name, current_msg, context["history"], context["mood_value"]
+                group_id, user_name, current_msg, history_messages, context["mood_value"]
             )
             context["current_state"] = personality_manager.get_random_state()
 
@@ -137,7 +140,9 @@ class ReplyContextBuilder:
         traits = personality_state.get("traits", {})
         recent_thoughts = personality_state.get("recent_thoughts", "暂无")
 
-        history_str = "\n".join(context["history"])
+        # 提取历史消息文本
+        history_messages = [entry["message"] for entry in context["history"]]
+        history_str = "\n".join(history_messages)
 
         memory_context = []
         if context["user_profile"]:
@@ -284,8 +289,9 @@ class ReplyContextBuilder:
         history = context["history"]
         participants = set()
         for entry in history:
-            if ":" in entry:
-                name = entry.split(":")[0]
+            msg_text = entry["message"]
+            if ":" in msg_text:
+                name = msg_text.split(":")[0]
                 if name != "self" and name != bot_config.bot_name:
                     participants.add(name)
         participants_str = "、".join(list(participants)) if participants else "暂无其他参与者"
@@ -298,8 +304,12 @@ class ReplyContextBuilder:
             "   - **绝对禁止**直接输出 `@用户名` 或 `@用户ID`，这种纯文本格式无法触发系统通知。\n"
             "2. **引用消息**：\n"
             "   - 如果你是在针对性地回答某个人的问题，或者是在承接上文，**必须**在回复的最开头加上 `[回复]` 标签。\n"
+            "   - **重要**：只使用 `[回复]` 这个标签，不要在标签中添加用户名（如 `[回复:用户名]` 或 `[回复@用户名]` 都是错误的）。\n"
             "   - 示例：`[回复] 听到了哦，你刚才说的事我记住了。`\n"
             "   - 只有带上这个标签，你的回复才会以'引用/回复'的形式发出，否则就是普通的发言。\n"
+            "3. **工具调用**：\n"
+            "   - 如果需要获取群消息上下文，可以使用 `get_message_context` 工具。\n"
+            "   - **重要**：工具调用后，你必须直接给出简洁的回复（5-15字），不要重复工具返回的信息，不要解释。\n"
         )
 
         messages.append({"role": "system", "content": system_prompt})

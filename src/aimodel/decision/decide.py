@@ -13,8 +13,31 @@ from src.mcp.registry import tool_registry
 from typing import Optional
 import json
 import asyncio
+import re
 
 logger = get_logger(__name__)
+
+
+def clean_reply_format(text: str) -> str:
+    """
+    清理消息文本中的QQ引用格式 [回复@名字:内容] 和富文本标签
+    
+    Args:
+        text: 原始消息文本
+        
+    Returns:
+        清理后的消息文本
+    """
+    if not text:
+        return text
+    # 匹配 [回复@名字:内容] 或 [回复@名字 :内容] 等格式
+    pattern = r'\[回复@[^:]+:\s*\]'
+    cleaned = re.sub(pattern, '', text)
+    
+    # 清理富文本标签（如图片HTML标签）
+    cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    
+    return cleaned.strip()
 
 
 async def should_i_reply(
@@ -101,9 +124,18 @@ async def should_i_reply(
     # 2. 准备上下文 (获取最近 15 条消息，提供更多选择空间)
     history = await db_manager.get_chat_log(group_id, limit=15)
 
+    # 提取消息文本和对应的 message_id，并清理引用格式
+    history_messages = []
+    history_message_ids = []
+    for item in history:
+        # 清理引用格式，避免AI模仿
+        clean_msg = clean_reply_format(item["message"])
+        history_messages.append(clean_msg)
+        history_message_ids.append(item["message_id"])
+
     # 构建带索引的历史消息，方便 AI 选择
     history_with_index = []
-    for idx, msg in enumerate(history):
+    for idx, msg in enumerate(history_messages):
         history_with_index.append(f"[{idx}] {msg}")
     history_str = "\n".join(history_with_index)
 
@@ -174,8 +206,8 @@ async def should_i_reply(
 
     # 检查最近的发言是否来自机器人自己
     bot_recently_spoke = False
-    if len(history) > 0:
-        for msg in reversed(history[-3:]):
+    if len(history_messages) > 0:
+        for msg in reversed(history_messages[-3:]):
             if msg.startswith(bot_config.bot_name + ":") or msg.startswith(f"{bot_config.bot_name}:"):
                 bot_recently_spoke = True
                 break
@@ -190,10 +222,17 @@ async def should_i_reply(
         "### 场景判断（核心）：\n"
         "**A. 正在和你对话**（0.5-0.95分）：历史有你的发言，当前消息在回应/延续你的话。优先回复。\n"
         "**B. 提到你但未对话**（0.1-0.5分）：被作为话题讨论，谨慎插话。\n"
-        "**C. 完全无关**（0.0-0.7分）：他人交流，但有质量时可参与：\n"
-        "   - 有相关记忆/经历，能提供有用信息，有独特视角\n"
-        "   - 只能说'哈哈''厉害'这种废话 → 不参与\n"
-        "   - 默认沉默，有料才说\n"
+        "**C. 完全无关**（0.0-0.7分）：他人交流，必须有强关联记忆才考虑参与：\n"
+        "   - **强关联记忆**（必须满足至少一条）\n"
+        "     * 记忆中明确提到过该话题/关键词\n"
+        "     * 记忆中与当前消息内容高度相关（相同事件、相似经历）\n"
+        "     * 有明确的用户印象或往事与此话题直接相关\n"
+        "   - **评分标准**\n"
+        "     * 有强关联记忆且能提供有价值信息：0.5-0.7分\n"
+        "     * 有弱关联记忆（仅略微相关）：0.1-0.3分\n"
+        "     * 无关联记忆：0分（绝不参与）\n"
+        "   - 只能说'哈哈''厉害'这种废话 → 即使有记忆也不参与\n"
+        "   - 默认沉默，有强关联记忆且有料才说\n"
         "   - **关键约束**：即使满足上述条件，也必须遵守你的人设风格（极简自然、符合性格），绝对不能为了参与而参与导致表现人机感\n\n"
         "### 核心原则：\n"
         "- **沉默是金**：默认不回复，你是真人不是助手，不需要对每件事都评论\n"
@@ -201,7 +240,12 @@ async def should_i_reply(
         "  - 只有以下情况'你'才指你：明确艾特你/提到你的名字/上一条是你发的/上下文明确与你相关\n"
         "  - 无法确定 → 默认不指你\n"
         "- **对话流向**：如果是用户A↔用户B的双人对话，不涉及你 → 严禁插话\n"
-        "- **记忆驱动**：话题与你的记忆高度重合 → 优先回复\n"
+        "- **绝对禁止复读攻击性言论**：不要选择包含攻击、嘲讽、贬低他人的消息进行回复，即使对方@你\n"
+        "  - 例如：对方说'你真蠢'，不要回复'你真蠢'\n"
+        "  - 正确做法：用不同的方式回应，或者选择忽略\n"
+        "- **记忆驱动**：\n"
+        "  - 场景A/B：话题与记忆重合可提升兴趣，但不是必需\n"
+        "  - 场景C：必须有强关联记忆才能参与，无记忆绝不插话\n"
         "- **心情影响**：\n"
         "  - 夸奖/关心/愉快话题：+1~+3\n"
         "  - 严重辱骂/恶意攻击：-5~-12\n"
@@ -210,7 +254,7 @@ async def should_i_reply(
         f"### 上下文信息：\n"
         f"最近记录（带索引）：\n{history_str}\n"
         f"### 格式说明：\n"
-        f"- 引用格式 [回复@用户名: \"内容\"] 表示「当前发送者在回复某用户」，引用内容是「被引用者」说的\n"
+        f'- 引用格式 [回复@用户名: "内容"] 表示「当前发送者在回复某用户」，引用内容是「被引用者」说的\n'
         f"- 历史消息中的'你''它'等代词需要判断是否指你（见前述指代消歧规则）\n\n"
         f"当前消息：{user_name}: {current_msg}\n"
         f"是否艾特你：{is_at_me}\n"
@@ -346,23 +390,49 @@ async def should_i_reply(
             content = final_stream_result["content"]
 
         content = content.strip()
+        if not content:
+            logger.warning("决策模型返回空内容，使用默认决策")
+            raise json.JSONDecodeError("Empty content", "", 0)
+        
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
             content = content.split("```")[1].split("```")[0].strip()
 
+        # 再次检查清理后的内容是否为空
+        if not content:
+            logger.warning("清理后内容为空，使用默认决策")
+            raise json.JSONDecodeError("Empty content after cleaning", "", 0)
+
         decision = json.loads(content)
 
         # 结果解析
         should_reply = decision.get("should_reply", False)
-        target_message_index = decision.get("target_message_index", max_idx)  # 默认选择最新消息
+        
+        # 确保 max_idx 是有效的（处理空历史消息的情况）
+        safe_max_idx = max_idx if max_idx >= 0 else 0
+        
+        target_message_index = decision.get("target_message_index", safe_max_idx)  # 默认选择最新消息
 
-        # 验证索引有效性
-        if target_message_index < 0 or target_message_index > max_idx:
-            target_message_index = max_idx
+        # 验证索引有效性（先处理 None 值）
+        if target_message_index is None:
+            target_message_index = safe_max_idx
+        elif not isinstance(target_message_index, int):
+            target_message_index = safe_max_idx
+        elif target_message_index < 0 or target_message_index > safe_max_idx:
+            target_message_index = safe_max_idx
 
-        # 从选定的消息中提取用户名和纯消息内容
-        selected_message = history[target_message_index]
+        # 再次确保索引有效（防止空列表访问）
+        if len(history_messages) == 0:
+            logger.warning("历史消息为空，使用当前消息")
+            target_message_index = 0
+            # 临时创建虚拟消息记录以避免索引错误
+            history_messages = [f"{user_name}: {current_msg}"]
+            history_message_ids = [None]
+
+        # 从选定的消息中提取用户名、纯消息内容和message_id
+        selected_message = history_messages[target_message_index]
+        selected_message_id = history_message_ids[target_message_index]
         selected_user = user_name  # 默认为当前用户
         target_message_content = selected_message  # 默认使用完整消息
 
@@ -389,12 +459,13 @@ async def should_i_reply(
         scene_desc = scene_descriptions.get(conversation_scene, "未知场景")
 
         print(
-            f"决策引擎: [场景:{conversation_scene}({scene_desc})] [回复:{should_reply}] [目标消息:{target_message_index}] [对象:{reply_to_user}] [内容:{target_message_content[:30]}...] [兴趣:{interest_score}] [心情:{mood_impact:+}] [理由:{decision.get('reason')}]"
+            f"决策引擎: [场景:{conversation_scene}({scene_desc})] [回复:{should_reply}] [目标消息:{target_message_index}] [消息ID:{selected_message_id}] [对象:{reply_to_user}] [内容:{target_message_content[:30]}...] [兴趣:{interest_score}] [心情:{mood_impact:+}] [理由:{decision.get('reason')}]"
         )
 
         return {
             "should_reply": should_reply,
             "target_message_index": target_message_index,
+            "target_message_id": selected_message_id,  # 选定消息的QQ消息ID
             "target_message_content": target_message_content,  # 纯消息内容(不含用户名)
             "selected_user": selected_user,  # 选定消息的发送者
             "reply_to_user": reply_to_user,  # AI选择的回复对象
@@ -409,6 +480,7 @@ async def should_i_reply(
             "should_reply": is_at_me,
             "mood_impact": 0,
             "target_message_index": 0,
+            "target_message_id": None,
             "target_message_content": current_msg,
             "selected_user": user_name,
             "reply_to_user": user_name,
@@ -422,6 +494,7 @@ async def should_i_reply(
             "should_reply": is_at_me,
             "mood_impact": 0,
             "target_message_index": 0,
+            "target_message_id": None,
             "target_message_content": current_msg,
             "selected_user": user_name,
             "reply_to_user": user_name,

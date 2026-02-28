@@ -88,7 +88,6 @@ async def consolidate_memories(group_id: int):
                 model=creds["model"],
                 messages=[{"role": "user", "content": optimized_prompt}],
                 temperature=0.3,
-                max_tokens=600,
             )
 
             # 使用思考模式处理器处理响应

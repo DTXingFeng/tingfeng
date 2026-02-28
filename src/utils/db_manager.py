@@ -159,11 +159,18 @@ class DBManager:
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         group_id INTEGER,
                         msg TEXT,
+                        message_id INTEGER,
                         is_processed INTEGER DEFAULT 0,
                         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
                 """
                 )
+
+                # 为已存在的表添加 message_id 字段（如果不存在）
+                try:
+                    await cursor.execute("ALTER TABLE chat_history ADD COLUMN message_id INTEGER")
+                except aiosqlite.OperationalError:
+                    pass
 
                 await cursor.execute(
                     """
@@ -395,42 +402,70 @@ class DBManager:
             print(f"数据库初始化失败: {e}")
             raise
 
-    async def add_chat_log(self, group_id: int, msg: str):
-        """添加一条聊天记录"""
+    async def add_chat_log(self, group_id: int, msg: str, message_id: Optional[int] = None):
+        """添加一条聊天记录
+        
+        Args:
+            group_id: 群组ID
+            msg: 消息内容
+            message_id: QQ消息ID（用于引用回复）
+        """
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
-            await cursor.execute("INSERT INTO chat_history (group_id, msg) VALUES (?, ?)", (group_id, msg))
+            if message_id is not None:
+                await cursor.execute(
+                    "INSERT INTO chat_history (group_id, msg, message_id) VALUES (?, ?, ?)",
+                    (group_id, msg, message_id)
+                )
+            else:
+                await cursor.execute("INSERT INTO chat_history (group_id, msg) VALUES (?, ?)", (group_id, msg))
             await conn.commit()
 
-    async def get_chat_log(self, group_id: int, limit: int = 10) -> List[str]:
-        """获取指定群组最近的聊天记录"""
+    async def get_chat_log(self, group_id: int, limit: int = 10) -> List[Dict[str, Any]]:
+        """获取指定群组最近的聊天记录
+        
+        Returns:
+            包含 message, message_id 的字典列表
+        """
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             await cursor.execute(
-                "SELECT msg FROM chat_history WHERE group_id = ? ORDER BY timestamp DESC LIMIT ?", (group_id, limit)
+                "SELECT msg, message_id FROM chat_history WHERE group_id = ? ORDER BY timestamp DESC LIMIT ?",
+                (group_id, limit)
             )
             rows = await cursor.fetchall()
-            messages = [row[0] for row in rows]
+            messages = [
+                {"message": row[0], "message_id": row[1]}
+                for row in rows
+            ]
             messages.reverse()
             return messages
 
     async def get_chat_log_before(
         self, group_id: int, limit: int = 10, before_timestamp: Optional[str] = None
-    ) -> List[str]:
-        """获取指定群组在指定时间之前的聊天记录（用于并发安全的回复生成）"""
+    ) -> List[Dict[str, Any]]:
+        """获取指定群组在指定时间之前的聊天记录（用于并发安全的回复生成）
+        
+        Returns:
+            包含 message, message_id 的字典列表
+        """
         async with await self._get_connection() as conn:
             cursor = await conn.cursor()
             if before_timestamp:
                 await cursor.execute(
-                    "SELECT msg FROM chat_history WHERE group_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?",
+                    "SELECT msg, message_id FROM chat_history WHERE group_id = ? AND timestamp < ? ORDER BY timestamp DESC LIMIT ?",
                     (group_id, before_timestamp, limit),
                 )
             else:
                 await cursor.execute(
-                    "SELECT msg FROM chat_history WHERE group_id = ? ORDER BY timestamp DESC LIMIT ?", (group_id, limit)
+                    "SELECT msg, message_id FROM chat_history WHERE group_id = ? ORDER BY timestamp DESC LIMIT ?",
+                    (group_id, limit)
                 )
             rows = await cursor.fetchall()
-            messages = [row[0] for row in rows]
+            messages = [
+                {"message": row[0], "message_id": row[1]}
+                for row in rows
+            ]
             messages.reverse()
             return messages
 

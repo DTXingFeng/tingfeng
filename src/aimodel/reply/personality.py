@@ -122,7 +122,6 @@ class PersonalityManager:
             stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
-                max_tokens=150,
                 temperature=0.8,
                 stream=True,
             )
@@ -283,7 +282,6 @@ class PersonalityManager:
                 base_url=creds["base_url"],
                 use_response_format=True,
                 stream=True,
-                max_tokens=1000,
                 temperature=0.7,
             )
 
@@ -396,7 +394,6 @@ class PersonalityManager:
                 base_url=creds["base_url"],
                 use_response_format=True,
                 stream=True,
-                max_tokens=500,
                 temperature=0.3,
             )
 
@@ -523,7 +520,6 @@ class PersonalityManager:
                 base_url=creds["base_url"],
                 use_response_format=True,
                 stream=True,
-                max_tokens=500,
                 temperature=0.3,
             )
 
@@ -663,7 +659,6 @@ class PersonalityManager:
             stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
-                max_tokens=200,
                 temperature=0.2,
                 stream=True,
             )
@@ -732,7 +727,9 @@ class PersonalityManager:
 
         client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
-        history_str = "\n".join(history)
+        # 提取历史消息文本
+        history_messages = [entry["message"] for entry in history]
+        history_str = "\n".join(history_messages)
 
         vibe_prompt = f"""
 你是一个语言分析专家。请分析以下群聊记录，提取该群聊目前的“氛围感”、“高频关键词/黑话”以及“特有的句式/口癖”。
@@ -767,7 +764,6 @@ class PersonalityManager:
                 base_url=creds["base_url"],
                 use_response_format=True,
                 stream=True,
-                max_tokens=300,
                 temperature=0.5,
             )
 

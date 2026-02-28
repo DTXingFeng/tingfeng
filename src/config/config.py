@@ -80,5 +80,8 @@ bot_config = config_manager.config
 
 # 启动时打印关键配置
 from src.utils.logger import get_logger
+
 startup_logger = get_logger(__name__)
-startup_logger.info(f"配置加载完成: decision_interval={bot_config.decision_interval}秒, interest_threshold={bot_config.interest_threshold}, reply_rate={bot_config.reply_rate}")
+startup_logger.info(
+    f"配置加载完成: decision_interval={bot_config.decision_interval}秒, interest_threshold={bot_config.interest_threshold}, reply_rate={bot_config.reply_rate}"
+)

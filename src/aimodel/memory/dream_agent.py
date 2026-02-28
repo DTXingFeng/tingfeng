@@ -78,7 +78,6 @@ async def dream_and_optimize(group_id: int):
             base_url=creds["base_url"],
             use_response_format=True,
             stream=False,
-            max_tokens=1000,
             temperature=0.4,
         )
 

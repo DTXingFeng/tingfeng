@@ -4,9 +4,10 @@ OpenAI API 平台兼容性处理工具
 提供统一的 API 调用接口，自动处理不同平台的兼容性问题
 """
 
+import asyncio
 import json
 from typing import Dict, Any, Optional
-from openai import AsyncOpenAI, BadRequestError
+from openai import AsyncOpenAI, BadRequestError, RateLimitError
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)

@@ -106,7 +106,6 @@ async def reflect_on_mute(
                 {"role": "user", "content": "我被禁言了，帮我反思一下原因。"},
             ],
             temperature=0.8,
-            max_tokens=800,
         )
 
         # 使用思考模式处理器处理响应
@@ -184,7 +183,8 @@ async def gather_reflection_context(
         else:
             history = await db_manager.get_chat_log(group_id, limit=10)
             if history:
-                context["recent_chat"] = "\n".join(history[-10:])
+                history_messages = [entry["message"] for entry in history]
+                context["recent_chat"] = "\n".join(history_messages[-10:])
 
         # 4. 获取黑话
         learned_slangs = await db_manager.get_slang_candidates(group_id, min_freq=20, stage=2)
@@ -280,7 +280,6 @@ async def generate_mute_response(group_id: int, reflection_data: dict[str, Any])
                 {"role": "user", "content": "我被解禁了，说点什么吧。"},
             ],
             temperature=0.9,
-            max_tokens=100,
         )
 
         # 使用思考模式处理器处理响应

@@ -146,7 +146,6 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
                     ],
                 }
             ],
-            max_tokens=500,
         )
 
         # 使用思考模式处理器处理响应

@@ -39,6 +39,28 @@ last_slang_mining_times = {}
 processed_messages = set()
 
 
+def clean_reply_format(text: str) -> str:
+    """
+    清理消息文本中的QQ引用格式 [回复@名字:内容] 和富文本标签
+    
+    Args:
+        text: 原始消息文本
+        
+    Returns:
+        清理后的消息文本
+    """
+    if not text:
+        return text
+    # 匹配 [回复@名字:内容] 或 [回复@名字 :内容] 等格式
+    pattern = r'\[回复@[^:]+:\s*\]'
+    cleaned = re.sub(pattern, '', text)
+    
+    # 清理富文本标签（如图片HTML标签）
+    cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    
+    return cleaned.strip()
+
+
 async def create_limited_task(coro):
     """
     创建受并发和速率限制的任务
@@ -128,25 +150,29 @@ async def process_my_logic(
     raw_msg: any,
     reply_message_id: Optional[int] = None,
     message_timestamp: Optional[str] = None,
+    target_message_id: Optional[int] = None,
 ):
     """
     处理消息回复逻辑
 
     Args:
         reply_message_id: 原始消息中引用的消息 ID（如果用户在引用某条消息）
+        target_message_id: 决策引擎选择要回复的消息 ID
     """
-    logger.info(f"[process_my_logic] 开始处理 消息ID={message_id}, 群组={group_id}")
+    logger.info(f"[process_my_logic] 开始处理 消息ID={message_id}, 群组={group_id}, 目标消息ID={target_message_id}")
     # 标记开始生成回复
     generating_reply_groups.add(group_id)
 
     try:
         # 消息去重：检查是否已处理过该消息
-        message_key = f"{group_id}:{message_id}"
+        # 优先使用 target_message_id（决策引擎选择要回复的消息），如果没有则使用 message_id（触发消息）
+        actual_message_id = target_message_id if target_message_id else message_id
+        message_key = f"{group_id}:{actual_message_id}"
         if message_key in processed_messages:
-            logger.info(f"[消息去重] 消息 {message_id} 已处理过，跳过重复回复")
+            logger.info(f"[消息去重] 消息 {actual_message_id} (目标消息) 已处理过，跳过重复回复")
             return
 
-        logger.info(f"[消息去重] 消息 {message_id} 未处理，加入已处理集合")
+        logger.info(f"[消息去重] 消息 {actual_message_id} 未处理，加入已处理集合")
         processed_messages.add(message_key)
 
         # 定期清理旧的消息 ID，防止内存泄漏（保留最近 10000 条）
@@ -184,17 +210,26 @@ async def process_my_logic(
 
         if reply_text or sticker_url:
             if reply_text:
-                await db_manager.add_chat_log(group_id, f"self:{reply_text}")
+                # 清理引用格式后再存储，避免AI模仿
+                clean_reply = clean_reply_format(reply_text)
+                await db_manager.add_chat_log(group_id, f"self:{clean_reply}")
 
             is_reply = False
             if reply_text and "[回复]" in reply_text:
                 is_reply = True
+                # 清理AI可能模仿的引用格式 [回复@名字:内容]
+                reply_text = clean_reply_format(reply_text)
                 reply_text = reply_text.replace("[回复]", "").strip()
 
-            # 确定引用消息 ID
-            # 1. 如果原始消息有引用（reply_message_id），使用被引用的消息 ID
-            # 2. 否则使用当前触发消息的 ID
-            actual_reply_id = reply_message_id if reply_message_id else message_id
+            # 确定引用消息 ID（优先级从高到低）
+            # 1. target_message_id: 决策引擎选择要回复的消息 ID（最准确）
+            # 2. reply_message_id: 用户原始消息中引用的消息 ID
+            # 3. message_id: 当前触发消息的 ID（兜底）
+            actual_reply_id = target_message_id or reply_message_id or message_id
+            logger.debug(f"[引用ID] target_message_id={target_message_id}, reply_message_id={reply_message_id}, message_id={message_id} -> actual_reply_id={actual_reply_id}")
+
+            # 如果决策引擎选择了没有 message_id 的旧消息，则不使用引用
+            use_reply = is_reply and target_message_id is not None
 
             if reply_text:
                 segments = split_text_to_segments(reply_text)
@@ -202,7 +237,7 @@ async def process_my_logic(
                     msg_segments = []
 
                     if i == 0:
-                        if is_reply:
+                        if use_reply:
                             msg_segments.append(MessageSegment.reply(actual_reply_id))
 
                     parts = re.split(r"(\[at:.*?\])", seg)
@@ -335,7 +370,8 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                 selected_user = decision.get("selected_user", ctx["display_name"])  # 选定消息的发送者
                                 target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
                                 target_msg = decision.get("target_message_content", ctx["llm_text"])
-                                logger.info(f"[延迟工人-准备调用process_my_logic] 消息ID={ctx['message_id']}")
+                                target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
+                                logger.info(f"[延迟工人-准备调用process_my_logic] 消息ID={ctx['message_id']}, 目标消息ID={target_msg_id}")
                                 await process_my_logic(
                                     bot=bot,
                                     event=ctx["event"],
@@ -354,6 +390,7 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     raw_msg=ctx["raw_msg"],
                                     reply_message_id=ctx.get("reply_message_id"),  # 传递引用消息 ID
                                     message_timestamp=ctx.get("timestamp"),  # 传递时间戳
+                                    target_message_id=target_msg_id,  # 传递决策引擎选择的message_id
                                 )
                             # 即使 AI 决定不回复，也有一定概率随机回复
                             elif random.random() < bot_config.reply_rate:
@@ -385,9 +422,11 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                 )
                             else:
                                 # AI 决定不回复，从队列中移除该消息
-                                logger.info(f"[延迟工人-不回复] 未满足回复条件或兴趣度不足")
+                                logger.info(f"[延迟工人-不回复] 未满足回复条件或兴趣度不足，更新冷却时间")
                                 if group_id in group_pending_contexts and group_pending_contexts[group_id]:
                                     group_pending_contexts[group_id].popleft()
+                                # 即使不回复，也要更新冷却时间，避免频繁调用决策引擎
+                                last_decision_times[group_id] = time.time()
                         finally:
                             deciding_groups.remove(group_id)
                 else:
@@ -490,10 +529,13 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
     # 5. 生成供 LLM 使用的清洗后文本
     llm_text = await process_message_for_llm(bot, event, vlm_func=get_vlm_description)
+    
+    # 清理QQ引用格式，避免AI模仿
+    llm_text = clean_reply_format(llm_text)
 
     # 6. 存入数据库 (格式: "名字:内容")
     msg_to_store = f"{display_name}:{llm_text}"
-    await db_manager.add_chat_log(group_id, msg_to_store)
+    await db_manager.add_chat_log(group_id, msg_to_store, message_id=message_id)
 
     # 6.5 确保群组中存在创造者的记忆
     try:
@@ -522,13 +564,14 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
             # 3. 实时模仿与黑话挖掘 (采样最近 20 条历史)
             history = await db_manager.get_chat_log(group_id, limit=20)
-            asyncio.create_task(create_limited_task(personality_manager.capture_style_patterns(group_id, history)))
+            history_messages = [entry["message"] for entry in history]
+            asyncio.create_task(create_limited_task(personality_manager.capture_style_patterns(group_id, history_messages)))
 
             # 黑话挖掘：限制调用频率，避免超时和API压力
             last_mining_time = last_slang_mining_times.get(group_id, 0)
             if time.time() - last_mining_time >= SLANG_MINING_INTERVAL:
                 last_slang_mining_times[group_id] = time.time()
-                asyncio.create_task(create_limited_task(personality_manager.mine_slang(group_id, history)))
+                asyncio.create_task(create_limited_task(personality_manager.mine_slang(group_id, history_messages)))
                 logger.debug(f"群 {group_id} 触发黑话挖掘分析")
             else:
                 logger.debug(f"群 {group_id} 黑话挖掘冷却中，跳过本次调用")
@@ -608,6 +651,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                 do_reply = True
                 target_user = decision.get("reply_to_user", display_name)
                 target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容
+                target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
                 # 记录被艾特时的回复行为
                 interest_score = decision.get("interest_score", 0.8)
                 await db_manager.record_bot_reply(group_id, display_name, is_at_bot=True, interest_score=interest_score)
@@ -662,12 +706,15 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                             group_id, display_name, is_at_bot=False, interest_score=bot_config.interest_threshold
                         )
                     else:
-                        logger.info(f"[不回复] 未满足回复条件")
+                        logger.info(f"[不回复] 未满足回复条件，更新冷却时间")
                         do_reply = False
+                        # 即使不回复，也要更新冷却时间，避免频繁调用决策引擎
+                        last_decision_times[group_id] = time.time()
 
                     selected_user = decision.get("selected_user", display_name)  # 选定消息的发送者
                     target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
                     target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容(纯文本)
+                    target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
                 finally:
                     deciding_groups.remove(group_id)
         else:
@@ -703,4 +750,5 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         raw_msg=raw_message,
         reply_message_id=reply_message_id,  # 传递引用消息 ID
         message_timestamp=current_timestamp,  # 传递时间戳用于历史记录过滤
+        target_message_id=target_msg_id,  # 传递决策引擎选择的message_id
     )

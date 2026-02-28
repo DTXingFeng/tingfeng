@@ -86,12 +86,14 @@ async def process_mute_reflection(group_id: int, operator_id: int, duration: int
     """
     try:
         recent_messages = await db_manager.get_chat_log(group_id, limit=20)
+        # 提取消息文本（用于传递给期望字符串列表的函数）
+        recent_message_texts = [entry["message"] for entry in recent_messages]
 
         reflection_result = await reflect_on_mute(
             group_id=group_id,
             operator_id=operator_id,
             duration_minutes=duration // 60,
-            recent_messages=recent_messages,
+            recent_messages=recent_message_texts,
         )
 
         if reflection_result.get("success"):
@@ -102,7 +104,7 @@ async def process_mute_reflection(group_id: int, operator_id: int, duration: int
             await db_manager.save_mute_reflection(
                 group_id=group_id,
                 ban_reason=ban_reason,
-                trigger_context="\n".join(recent_messages[-5:]) if recent_messages else "",
+                trigger_context="\n".join(recent_message_texts[-5:]) if recent_message_texts else "",
                 reflection_thought=reflection,
                 lesson_learned=lesson,
                 operator_id=operator_id,

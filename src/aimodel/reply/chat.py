@@ -12,12 +12,40 @@ from src.utils.error_handler import handle_errors, APIError
 from src.utils.thinking_mode import thinking_handler, stream_with_thinking_mode
 from src.mcp.registry import tool_registry
 from typing import List, Optional, Dict, Any, cast
+from collections import deque
 import random
 import re
 import asyncio
 import json
 
 logger = get_logger(__name__)
+
+# 最近回复缓存（防复读机制）
+# 结构: {group_id: deque(["reply1", "reply2", ...])}
+# 每个群组保留最近5条回复
+_recent_replies_cache: Dict[int, deque] = {}
+
+
+def clean_reply_format(text: str) -> str:
+    """
+    清理消息文本中的QQ引用格式 [回复@名字:内容] 和富文本标签
+    
+    Args:
+        text: 原始消息文本
+        
+    Returns:
+        清理后的消息文本
+    """
+    if not text:
+        return text
+    # 匹配 [回复@名字:内容] 或 [回复@名字 :内容] 等格式
+    pattern = r'\[回复@[^:]+:\s*\]'
+    cleaned = re.sub(pattern, '', text)
+    
+    # 清理富文本标签（如图片HTML标签）
+    cleaned = re.sub(r'<[^>]+>', '', cleaned)
+    
+    return cleaned.strip()
 
 
 def get_mood_description(mood_value: int) -> str:
@@ -36,6 +64,52 @@ def get_mood_description(mood_value: int) -> str:
         return "挺开心的 (心情很好，语气比较轻快。)"
     else:
         return "很开心 (心情非常好，比较活跃，但依然保持适度。)"
+
+
+def _check_is_repetition(group_id: int, reply_text: str) -> bool:
+    """
+    检查回复是否是复读（与最近5条回复重复）
+    
+    Args:
+        group_id: 群组ID
+        reply_text: 要检查的回复文本
+        
+    Returns:
+        True 如果是复读，False 否则
+    """
+    # 清理文本以便比较
+    cleaned_text = clean_reply_format(reply_text).lower().strip()
+    
+    # 获取该群组的最近回复
+    if group_id not in _recent_replies_cache:
+        _recent_replies_cache[group_id] = deque(maxlen=5)
+    
+    recent_replies = _recent_replies_cache[group_id]
+    
+    # 检查是否重复
+    for recent in recent_replies:
+        if cleaned_text == recent.lower().strip():
+            logger.info(f"[防复读] 检测到复读: '{reply_text}' 与最近回复重复")
+            return True
+    
+    return False
+
+
+def _record_reply(group_id: int, reply_text: str) -> None:
+    """
+    记录回复到缓存
+    
+    Args:
+        group_id: 群组ID
+        reply_text: 回复文本
+    """
+    cleaned_text = clean_reply_format(reply_text).strip()
+    
+    if group_id not in _recent_replies_cache:
+        _recent_replies_cache[group_id] = deque(maxlen=5)
+    
+    _recent_replies_cache[group_id].append(cleaned_text)
+    logger.debug(f"[防复读] 已记录回复: '{cleaned_text[:30]}...' (群{group_id}, 缓存大小: {len(_recent_replies_cache[group_id])})")
 
 
 async def get_chat_reply(
@@ -113,8 +187,9 @@ async def get_chat_reply(
     # 提取历史记录中的所有参与者名字，用于艾特功能
     participants = set()
     for entry in history:
-        if ":" in entry:
-            name = entry.split(":")[0]
+        msg_text = entry["message"]
+        if ":" in msg_text:
+            name = msg_text.split(":")[0]
             if name != "self" and name != bot_config.bot_name:
                 participants.add(name)
     participants_str = "、".join(list(participants)) if participants else "暂无其他参与者"
@@ -201,15 +276,33 @@ async def get_chat_reply(
         "   - **动词前置**：'发log''贴报错''重启试试'，直接说需要做的。\n"
         "   - **状态用词表达**：'崩了''卡了''拉了''没了'，一个词就是完整状态。\n"
         "2. **复读的智慧**：\n"
+        "   - **绝对禁止**复读攻击性、负面性、嘲讽性言论。\n"
         "   - **不要复读**对方的自嘲、困境、负面陈述（如'白粥配热水'），这会显得你在嘲笑他。\n"
-        "   - **可以参与**群体的刷梗、接梗、+1、复读欢乐氛围，这时候不参与反而很奇怪。\n"
+        "   - **可以参与**群体的刷梗、接梗、+1、复读欢乐氛围，但仅限于轻松愉快的场合。\n"
+        "   - **核心原则**：复读的前提是欢乐氛围，如果涉及攻击、嘲讽、负面情绪，绝对不参与。\n"
         "3. **情感共鸣优先**：关注对方当下的真实感受，而不是字面内容。自嘲时给予安慰/共情，开心时一起开心，困惑时提供帮助。\n"
-        "4. **多样化表达**：不要总用相同的模式（如'绷不住了''笑死'）。换点新鲜的表达，根据情境变化。\n"
+        "4. **多样化表达（重要）**：\n"
+        "   - 不要总用相同的模式（如'绷不住了''笑死'）。换点新鲜的表达，根据情境变化。\n"
+        "   - **不要重复自己的话**：如果你刚才说过类似的内容，不要再说一遍。换种说法或换角度表达。\n"
+        "   - 如果发现自己在说同样的话，直接闭嘴，不要继续重复。\n"
         "5. **禁止解释**：不要解释为什么好笑、不要分析话题、不要点评效果、不要说教。直接给出反应或回应，说完就闭嘴。\n"
         "6. **接地气但不刻意**：用群友的说话风格，但不要生硬套用。你是真人，不是在模仿真人。\n"
         "7. **表情包使用**：自然时才用，不要每句话都加。格式：'[表情:标签名]'，可选：开心、暴躁、委屈、得意、傲娇、摸摸头、疑惑、震惊、大哭。\n"
         "8. **玩梗识别**：网络用语里'四'='死'、'笑死''想死噜'这些就是普通表达，别过度解读。除非对方表现出明显的痛苦绝望或具体的自伤计划，否则一律按玩笑处理。\n"
         "9. **敷衍回复（当被@但不知道说什么时）**：如果对方@你但你真的不知道说什么，或者觉得要说的内容会很空洞、很官方、像在说教，可以用极简短的方式敷衍（1-2个字），或者只发表情包标签。宁可敷衍也不要强行回复一堆废话。\n"
+        "10. **记忆约束（基于记忆的合理推测）**：\n"
+        "   - **核心原则**：回复内容必须基于已有记忆（用户画像、具体记忆点、往事）或从中提取的合理推测，绝不能凭空捏造完全无关的内容。\n"
+        "   - **允许的推测**（基于记忆线索）：\n"
+        "     * 从用户画像推测：如'他是程序员'→推测可能加班、懂技术话题\n"
+        "     * 从具体记忆联想：如'他昨天感冒了'→推测可能还没完全恢复\n"
+        "     * 从往事延伸：如'他喜欢玩原神'→推测可能了解新版本内容\n"
+        "   - **禁止的瞎编**：\n"
+        "     * 编造记忆中不存在的具体事件、对话、细节\n"
+        "     * 把A的事安在B身上\n"
+        "     * 虚构从未提及过的经历或爱好\n"
+        "   - **不知为不知**：如果记忆完全空白且无法推测，直接说'不知道''没印象'，别硬编。\n"
+        "   - **优先参考具体记忆**：具体记忆点比整体印象更可靠，优先使用具体记忆中的信息。\n"
+        "   - **避免时空混乱**：回忆往事时，不要把不同时间、不同人的事件混淆在一起。\n"
     )
 
     # 注入关系状态引导
@@ -231,7 +324,19 @@ async def get_chat_reply(
     system_prompt += (
         "\n\n### 艾特和回复：\n"
         f"活跃用户：{participants_str}\n"
-        "艾特人用[at:名字]，回复人加[回复]开头。别用纯文本@。\n"
+        "艾特人用[at:名字]，回复人加[回复]开头（只使用[回复]，不要在标签中添加用户名）。别用纯文本@。\n"
+        "\n### 多人对话处理（重要）：\n"
+        "1. **跟踪对话流**：仔细阅读群聊记录，理解对话在谁之间进行。\n"
+        "   - 如果A和B在对话，C突然加入，你需要理解C是在对谁说话。\n"
+        "   - 如果有人在说你的坏话或攻击你，即使没有@你，也要根据情况回应。\n"
+        "2. **及时响应**：不要等对话已经过半了才回复。如果你要参与，要跟得上对话节奏。\n"
+        "3. **正确理解'你'**：群聊记录中的'你'可能指别人，只有以下情况才是指你：\n"
+        "   - 消息明确提到你的名字\n"
+        "   - 消息艾特了你\n"
+        "   - 消息是在接你上一句话\n"
+        "4. **攻击性言论**：当有人攻击你（如嘲讽你的技术能力、贬低你），要根据关系决定回应：\n"
+        "   - 熟人：可以回怼或自嘲\n"
+        "   - 陌生人：简短回应或无视\n"
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -297,8 +402,9 @@ async def get_chat_reply(
         )
 
     # 将历史记录加入上下文
-    # 历史记录已经是 "名字:内容" 格式
-    history_str = "\n".join(history)
+    # 历史记录已经是 "名字:内容" 格式，清理引用格式后传递给 AI
+    history_messages = [clean_reply_format(entry["message"]) for entry in history]
+    history_str = "\n".join(history_messages)
     messages.append(
         {
             "role": "user",
@@ -307,14 +413,17 @@ async def get_chat_reply(
         }
     )
 
+    # 诊断日志：记录历史消息
+    logger.info(f"历史消息数量: {len(history_messages)}, 内容预览: {history_str[:300] if history_str else '空'}...")
+
     # 4. 使用上下文管理器优化消息列表
     optimized_messages, total_tokens = context_manager.truncate_messages(
         messages=messages, model_alias=model_alias, max_output_tokens=500, reserve_ratio=0.1
     )
 
     if total_tokens > 0:
-        print(
-            f"[上下文管理] 模型: {model_alias}, 使用tokens: {total_tokens}/{context_manager.get_model_max_tokens(model_alias)}"
+        logger.info(
+            f"[上下文管理] 模型: {model_alias}, 使用tokens: {total_tokens}/{context_manager.get_model_max_tokens(model_alias)}, 消息数: {len(optimized_messages)}"
         )
 
     # 5. 调用 AI（全面使用流式传输）
@@ -329,7 +438,6 @@ async def get_chat_reply(
         stream_params = {
             "model": creds["model"],
             "messages": optimized_messages,
-            "max_tokens": 150,
             "temperature": 0.7,
             "stream": True,
         }
@@ -399,10 +507,14 @@ async def get_chat_reply(
             logger.info(f"检测到 {len(tool_calls_dict)} 个工具调用")
 
             # 构建包含工具调用的消息列表
-            tool_messages = optimized_messages.copy()
+            # optimized_messages 包含传入 LLM 的所有消息（system + user）
+            # 我们需要保留所有这些消息，然后添加 assistant/tool/user 消息来完成工具调用流程
+            tool_messages = optimized_messages.copy() if optimized_messages else []
 
-            # 添加 assistant 的工具调用记录
+            # 准备工具调用和工具结果
             assistant_tool_calls = []
+            tool_result_messages = []
+
             for idx, tool_call_data in tool_calls_dict.items():
                 tool_name = tool_call_data["name"]
                 tool_args = tool_call_data["arguments"]
@@ -424,6 +536,7 @@ async def get_chat_reply(
                 # 生成工具调用 ID
                 tool_call_id = f"call_{idx}"
 
+                # 收集工具调用信息
                 assistant_tool_calls.append(
                     {
                         "id": tool_call_id,
@@ -438,20 +551,25 @@ async def get_chat_reply(
                 if tool_result.get("success"):
                     result_data = tool_result.get("data", {})
                     logger.info(f"工具 {tool_name} 执行成功")
+                    logger.debug(f"工具返回原始数据类型: {type(result_data)}, 内容: {result_data}")
 
-                    # 添加工具结果消息（使用 tool role）
-                    tool_messages.append(
+                    # 序列化工具结果
+                    tool_content = json.dumps(result_data, ensure_ascii=False)
+                    logger.debug(f"工具序列化后内容长度: {len(tool_content)}, 内容: {tool_content[:500]}")
+
+                    # 收集工具结果消息
+                    tool_result_messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call_id,
-                            "content": json.dumps(result_data, ensure_ascii=False),
+                            "content": tool_content,
                         }
                     )
                 else:
                     tool_error = tool_result.get("error")
                     logger.error(f"工具 {tool_name} 执行失败: {tool_error}")
-                    # 添加错误结果
-                    tool_messages.append(
+                    # 收集错误结果
+                    tool_result_messages.append(
                         {
                             "role": "tool",
                             "tool_call_id": tool_call_id,
@@ -459,15 +577,41 @@ async def get_chat_reply(
                         }
                     )
 
-            # 添加 assistant 的工具调用消息
+            # 按正确顺序添加消息：
+            # 1. 先添加 assistant 消息（带 tool_calls）
             tool_messages.append({"role": "assistant", "content": "", "tool_calls": assistant_tool_calls})
+
+            # 2. 再添加所有 tool 消息（带 tool_call_id）
+            for tool_msg in tool_result_messages:
+                tool_messages.append(tool_msg)
+                logger.debug(f"工具消息已添加到列表，当前 tool_messages 长度: {len(tool_messages)}")
+            
+            # 添加用户提示，要求基于工具结果生成回复
+            # 重要：必须包含用户的原始问题，否则模型不知道要回答什么
+            tool_messages.append({
+                "role": "user",
+                "content": f"工具已执行完毕。用户的问题是：{current_msg}\n\n"
+                f"现在请直接回答用户的问题（5-15字），基于工具返回的信息和你的知识。\n"
+                f"重要：不要再次调用任何工具，不要解释工具返回的内容，直接回答问题即可。"
+            })
+
+            # 记录完整的消息列表用于诊断（debug级别）
+            logger.debug(f"第二轮 LLM 调用前完整消息列表 ({len(tool_messages)} 条消息):")
+            for idx, msg in enumerate(tool_messages):
+                role = msg.get("role", "unknown")
+                content_preview = str(msg.get("content", ""))[:200]
+                tool_calls_info = msg.get("tool_calls", "")
+                if tool_calls_info:
+                    tool_calls_info = f", tool_calls: {len(tool_calls_info)} 个调用"
+                logger.debug(f"  [{idx}] role={role}, content_preview={content_preview}{tool_calls_info}")
 
             # 再次使用流式传输生成最终回复
             tool_messages_payload = cast(list, tool_messages)
+            logger.info(f"开始第二轮 LLM 调用，模型: {creds['model']}, 消息数: {len(tool_messages_payload)}")
+
             stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=tool_messages_payload,
-                max_tokens=120,
                 temperature=0.7,
                 stream=True,
             )
@@ -479,11 +623,31 @@ async def get_chat_reply(
                 collect_thinking=True,
             )
 
+            # 记录第二轮流式传输结果
+            tool_reply_content = tool_stream_result["content"]
+            tool_reasoning_content = tool_stream_result["thinking"]
+            logger.info(
+                f"工具调用后流式传输完成: 内容长度 {len(tool_reply_content)}, 推理长度 {len(tool_reasoning_content)}"
+            )
+
             # 优先使用最终回复
             final_content = (
-                tool_stream_result["content"] if tool_stream_result["content"] else tool_stream_result["thinking"]
+                tool_reply_content if tool_reply_content else tool_reasoning_content
             )
             final_content = final_content.strip()
+
+            # 诊断：如果工具调用后没有内容，记录详细信息
+            if not final_content:
+                logger.error(
+                    f"工具调用后模型未生成任何内容！\n"
+                    f"  - tool_reply_content 长度: {len(tool_reply_content) if tool_reply_content else 0}\n"
+                    f"  - tool_reasoning_content 长度: {len(tool_reasoning_content) if tool_reasoning_content else 0}\n"
+                    f"  - 工具是否成功执行: 是\n"
+                    f"  - 第二轮消息数: {len(tool_messages)}\n"
+                    f"这说明：工具执行成功且返回了数据，但模型拒绝生成回复！"
+                )
+                # 不发送任何内容，让上层决定
+                return {"text": None, "sticker": None}
         else:
             # 没有工具调用，使用收集到的文本
             final_content = final_content
@@ -506,11 +670,28 @@ async def get_chat_reply(
         # 无论是否找到对应表情，都从文本中移除标签
         final_content = re.sub(r"\[\s*表情\s*[:：].*?\]", "", final_content).strip()
 
+        # 清理 AI 错误使用的引用格式 [回复:用户名] 或 [回复@用户名]
+        # 正确格式应该是 [回复]，但 AI 可能会模仿用户输入的格式
+        final_content = re.sub(r'\[回复[:@][^\]]*\]', '[回复]', final_content)
+        
         # 移除可能的 "self:" 或 "听风:" 前缀
         if final_content.startswith("self:"):
             final_content = final_content[5:].strip()
         elif final_content.startswith(f"{bot_config.bot_name}:"):
             final_content = final_content[len(bot_config.bot_name) + 1 :].strip()
+
+        # 清理富文本标签（如图片HTML标签）
+        final_content = re.sub(r'<[^>]+>', '', final_content).strip()
+
+        # 防复读检查：检查是否与最近5条回复重复
+        if final_content and _check_is_repetition(group_id, final_content):
+            logger.warning(f"[防复读] 检测到复读，拒绝发送回复: '{final_content}'")
+            # 返回空，让上层决定是否发送
+            return {"text": None, "sticker": None}
+
+        # 记录本次回复到缓存
+        if final_content:
+            _record_reply(group_id, final_content)
 
         return {"text": final_content, "sticker": sticker_url}
 

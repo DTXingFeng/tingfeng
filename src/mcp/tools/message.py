@@ -38,9 +38,11 @@ class GetRecentMessagesTool(BaseTool):
 
             messages = []
             for log in chat_logs:
+                # 新格式返回字典：{"message": "名字:内容", "message_id": int}
+                msg_text = log["message"]
                 # 解析日志格式 "名字:内容"
-                if ":" in log:
-                    parts = log.split(":", 1)
+                if ":" in msg_text:
+                    parts = msg_text.split(":", 1)
                     if len(parts) == 2:
                         sender = parts[0].strip()
                         content = parts[1].strip()
@@ -87,8 +89,10 @@ class GetMessageContextTool(BaseTool):
 
             # 简单处理：所有消息都算作"前面"
             for log in chat_logs:
-                if ":" in log:
-                    parts = log.split(":", 1)
+                # 新格式返回字典：{"message": "名字:内容", "message_id": int}
+                msg_text = log["message"]
+                if ":" in msg_text:
+                    parts = msg_text.split(":", 1)
                     if len(parts) == 2:
                         sender = parts[0].strip()
                         content = parts[1].strip()
