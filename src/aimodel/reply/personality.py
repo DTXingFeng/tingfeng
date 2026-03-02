@@ -406,11 +406,18 @@ class PersonalityManager:
 
             result = stream_result["content"].strip()
 
+            if not result:
+                logger.warning("AI 返回空内容，跳过风格捕捉")
+                return
+
             try:
                 cleaned_result = extract_json_from_markdown(result)
+                if not cleaned_result:
+                    logger.error(f"清理后的 JSON 为空，原始内容: {result[:100]}")
+                    return
                 data = json.loads(cleaned_result)
             except json.JSONDecodeError as e:
-                logger.error(f"AI 返回的 JSON 格式错误: {e}, 原始内容: {result}")
+                logger.error(f"AI 返回的 JSON 格式错误: {e}, 原始内容: {result[:200]}")
                 return
 
             if isinstance(data, dict):

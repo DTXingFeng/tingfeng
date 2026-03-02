@@ -625,6 +625,23 @@ class DBManager:
             row = await cursor.fetchone()
             return row[0] if row else None
 
+    async def get_user_name_by_id(self, group_id: int, user_id: int) -> Optional[str]:
+        """根据用户ID查找用户名"""
+        async with await self._get_connection() as conn:
+            cursor = await conn.cursor()
+            await cursor.execute(
+                "SELECT user_name FROM user_profiles WHERE group_id = ? AND user_id = ?", (group_id, user_id)
+            )
+            row = await cursor.fetchone()
+            if row and row[0]:
+                return row[0]
+            # 如果user_profiles中没有，尝试从user_mapping中查找
+            await cursor.execute(
+                "SELECT user_name FROM user_mapping WHERE group_id = ? AND user_id = ?", (group_id, user_id)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
     async def get_user_impression_history(self, user_id: int, limit: int = 10) -> List[Dict[str, Any]]:
         """获取某个用户的印象历史记录（跨群查询）"""
         async with await self._get_connection() as conn:

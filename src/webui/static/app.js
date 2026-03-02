@@ -348,6 +348,10 @@ const App = (() => {
     const userId = impressionUserId.value.trim();
     const data = await fetchJson(`/api/user/impression?group_id=${groupId}&user_id=${userId}`);
     impressionText.value = data.impression || "";
+    // 自动填充用户名
+    if (data.user_name) {
+      impressionUserName.value = data.user_name;
+    }
     
     // 同时加载印象历史
     try {

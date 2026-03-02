@@ -672,7 +672,10 @@ async def get_chat_reply(
 
         # 清理 AI 错误使用的引用格式 [回复:用户名] 或 [回复@用户名]
         # 正确格式应该是 [回复]，但 AI 可能会模仿用户输入的格式
-        final_content = re.sub(r'\[回复[:@][^\]]*\]', '[回复]', final_content)
+        # 清理回复标签格式：将 [回复]用户名:内容 转换为 [回复]内容
+        # 匹配：[回复]xxx: 或 [回复@xxx: 或 [回复@xxx ]:
+        final_content = re.sub(r'\[回复\][^:]*:', '[回复]', final_content)
+        final_content = re.sub(r'\[回复@[^:]+:\s*', '[回复]', final_content)
         
         # 移除可能的 "self:" 或 "听风:" 前缀
         if final_content.startswith("self:"):

@@ -475,7 +475,7 @@ async def should_i_reply(
         }
 
     except json.JSONDecodeError as e:
-        logger.error("决策结果JSON解析失败: {}，原始内容: {}", e, content)
+        logger.error(f"决策结果JSON解析失败: {e}，原始内容: {content[:200] if content else '(空)'}")
         return {
             "should_reply": is_at_me,
             "mood_impact": 0,
