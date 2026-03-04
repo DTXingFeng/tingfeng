@@ -21,22 +21,22 @@ logger = get_logger(__name__)
 def clean_reply_format(text: str) -> str:
     """
     清理消息文本中的QQ引用格式 [回复@名字:内容] 和富文本标签
-    
+
     Args:
         text: 原始消息文本
-        
+
     Returns:
         清理后的消息文本
     """
     if not text:
         return text
     # 匹配 [回复@名字:内容] 或 [回复@名字 :内容] 等格式
-    pattern = r'\[回复@[^:]+:\s*\]'
-    cleaned = re.sub(pattern, '', text)
-    
+    pattern = r"\[回复@[^:]+:\s*\]"
+    cleaned = re.sub(pattern, "", text)
+
     # 清理富文本标签（如图片HTML标签）
-    cleaned = re.sub(r'<[^>]+>', '', cleaned)
-    
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+
     return cleaned.strip()
 
 
@@ -393,7 +393,7 @@ async def should_i_reply(
         if not content:
             logger.warning("决策模型返回空内容，使用默认决策")
             raise json.JSONDecodeError("Empty content", "", 0)
-        
+
         if "```json" in content:
             content = content.split("```json")[1].split("```")[0].strip()
         elif "```" in content:
@@ -408,10 +408,10 @@ async def should_i_reply(
 
         # 结果解析
         should_reply = decision.get("should_reply", False)
-        
+
         # 确保 max_idx 是有效的（处理空历史消息的情况）
         safe_max_idx = max_idx if max_idx >= 0 else 0
-        
+
         target_message_index = decision.get("target_message_index", safe_max_idx)  # 默认选择最新消息
 
         # 验证索引有效性（先处理 None 值）

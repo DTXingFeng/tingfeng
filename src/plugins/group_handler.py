@@ -42,22 +42,22 @@ processed_messages = set()
 def clean_reply_format(text: str) -> str:
     """
     清理消息文本中的QQ引用格式 [回复@名字:内容] 和富文本标签
-    
+
     Args:
         text: 原始消息文本
-        
+
     Returns:
         清理后的消息文本
     """
     if not text:
         return text
     # 匹配 [回复@名字:内容] 或 [回复@名字 :内容] 等格式
-    pattern = r'\[回复@[^:]+:\s*\]'
-    cleaned = re.sub(pattern, '', text)
-    
+    pattern = r"\[回复@[^:]+:\s*\]"
+    cleaned = re.sub(pattern, "", text)
+
     # 清理富文本标签（如图片HTML标签）
-    cleaned = re.sub(r'<[^>]+>', '', cleaned)
-    
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+
     return cleaned.strip()
 
 
@@ -226,7 +226,9 @@ async def process_my_logic(
             # 2. reply_message_id: 用户原始消息中引用的消息 ID
             # 3. message_id: 当前触发消息的 ID（兜底）
             actual_reply_id = target_message_id or reply_message_id or message_id
-            logger.debug(f"[引用ID] target_message_id={target_message_id}, reply_message_id={reply_message_id}, message_id={message_id} -> actual_reply_id={actual_reply_id}")
+            logger.debug(
+                f"[引用ID] target_message_id={target_message_id}, reply_message_id={reply_message_id}, message_id={message_id} -> actual_reply_id={actual_reply_id}"
+            )
 
             # 如果决策引擎选择了没有 message_id 的旧消息，则不使用引用
             use_reply = is_reply and target_message_id is not None
@@ -371,7 +373,9 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                 target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
                                 target_msg = decision.get("target_message_content", ctx["llm_text"])
                                 target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
-                                logger.info(f"[延迟工人-准备调用process_my_logic] 消息ID={ctx['message_id']}, 目标消息ID={target_msg_id}")
+                                logger.info(
+                                    f"[延迟工人-准备调用process_my_logic] 消息ID={ctx['message_id']}, 目标消息ID={target_msg_id}"
+                                )
                                 await process_my_logic(
                                     bot=bot,
                                     event=ctx["event"],
@@ -529,7 +533,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
     # 5. 生成供 LLM 使用的清洗后文本
     llm_text = await process_message_for_llm(bot, event, vlm_func=get_vlm_description)
-    
+
     # 清理QQ引用格式，避免AI模仿
     llm_text = clean_reply_format(llm_text)
 
@@ -539,9 +543,9 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
     # 6.5 确保群组中存在创造者的记忆
     try:
-        from src.utils.init_memory import ensure_creator_memory
+        from src.utils.init_memory import initialize_creator_memory
 
-        asyncio.create_task(create_limited_task(ensure_creator_memory(group_id)))
+        asyncio.create_task(create_limited_task(initialize_creator_memory(group_id)))
     except Exception as e:
         logger.debug(f"确保创造者记忆时出错: {e}")
 
@@ -565,7 +569,9 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             # 3. 实时模仿与黑话挖掘 (采样最近 20 条历史)
             history = await db_manager.get_chat_log(group_id, limit=20)
             history_messages = [entry["message"] for entry in history]
-            asyncio.create_task(create_limited_task(personality_manager.capture_style_patterns(group_id, history_messages)))
+            asyncio.create_task(
+                create_limited_task(personality_manager.capture_style_patterns(group_id, history_messages))
+            )
 
             # 黑话挖掘：限制调用频率，避免超时和API压力
             last_mining_time = last_slang_mining_times.get(group_id, 0)

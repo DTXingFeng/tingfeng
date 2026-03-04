@@ -404,7 +404,7 @@ class DBManager:
 
     async def add_chat_log(self, group_id: int, msg: str, message_id: Optional[int] = None):
         """添加一条聊天记录
-        
+
         Args:
             group_id: 群组ID
             msg: 消息内容
@@ -414,8 +414,7 @@ class DBManager:
             cursor = await conn.cursor()
             if message_id is not None:
                 await cursor.execute(
-                    "INSERT INTO chat_history (group_id, msg, message_id) VALUES (?, ?, ?)",
-                    (group_id, msg, message_id)
+                    "INSERT INTO chat_history (group_id, msg, message_id) VALUES (?, ?, ?)", (group_id, msg, message_id)
                 )
             else:
                 await cursor.execute("INSERT INTO chat_history (group_id, msg) VALUES (?, ?)", (group_id, msg))
@@ -423,7 +422,7 @@ class DBManager:
 
     async def get_chat_log(self, group_id: int, limit: int = 10) -> List[Dict[str, Any]]:
         """获取指定群组最近的聊天记录
-        
+
         Returns:
             包含 message, message_id 的字典列表
         """
@@ -431,13 +430,10 @@ class DBManager:
             cursor = await conn.cursor()
             await cursor.execute(
                 "SELECT msg, message_id FROM chat_history WHERE group_id = ? ORDER BY timestamp DESC LIMIT ?",
-                (group_id, limit)
+                (group_id, limit),
             )
             rows = await cursor.fetchall()
-            messages = [
-                {"message": row[0], "message_id": row[1]}
-                for row in rows
-            ]
+            messages = [{"message": row[0], "message_id": row[1]} for row in rows]
             messages.reverse()
             return messages
 
@@ -445,7 +441,7 @@ class DBManager:
         self, group_id: int, limit: int = 10, before_timestamp: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """获取指定群组在指定时间之前的聊天记录（用于并发安全的回复生成）
-        
+
         Returns:
             包含 message, message_id 的字典列表
         """
@@ -459,13 +455,10 @@ class DBManager:
             else:
                 await cursor.execute(
                     "SELECT msg, message_id FROM chat_history WHERE group_id = ? ORDER BY timestamp DESC LIMIT ?",
-                    (group_id, limit)
+                    (group_id, limit),
                 )
             rows = await cursor.fetchall()
-            messages = [
-                {"message": row[0], "message_id": row[1]}
-                for row in rows
-            ]
+            messages = [{"message": row[0], "message_id": row[1]} for row in rows]
             messages.reverse()
             return messages
 

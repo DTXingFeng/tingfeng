@@ -577,12 +577,7 @@ async def get_impression(request: Request) -> Dict[str, Any]:
     impression = await db_manager.get_user_impression(group_id, user_id)
     # 同时查询用户名，方便前端自动填充
     user_name = await db_manager.get_user_name_by_id(group_id, user_id)
-    return {
-        "group_id": group_id, 
-        "user_id": user_id, 
-        "user_name": user_name or "",
-        "impression": impression or ""
-    }
+    return {"group_id": group_id, "user_id": user_id, "user_name": user_name or "", "impression": impression or ""}
 
 
 @app.get("/api/user/impression/history")
@@ -608,13 +603,13 @@ async def update_impression(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise ValueError("用户ID无效")
     user_id = int(user_id_raw)
     user_name = str(payload.get("user_name", "")).strip()
-    
+
     # 如果用户名为空，尝试从数据库查询
     if not user_name:
         user_name = await db_manager.get_user_name_by_id(group_id, user_id)
         if not user_name:
             raise ValueError(f"未找到用户ID {user_id} 对应的用户名，请确保该用户在群内发过言，或手动输入用户名")
-    
+
     impression = str(payload.get("impression", "")).strip()
     if not impression:
         raise ValueError("印象不能为空")

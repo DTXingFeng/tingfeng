@@ -29,22 +29,22 @@ _recent_replies_cache: Dict[int, deque] = {}
 def clean_reply_format(text: str) -> str:
     """
     清理消息文本中的QQ引用格式 [回复@名字:内容] 和富文本标签
-    
+
     Args:
         text: 原始消息文本
-        
+
     Returns:
         清理后的消息文本
     """
     if not text:
         return text
     # 匹配 [回复@名字:内容] 或 [回复@名字 :内容] 等格式
-    pattern = r'\[回复@[^:]+:\s*\]'
-    cleaned = re.sub(pattern, '', text)
-    
+    pattern = r"\[回复@[^:]+:\s*\]"
+    cleaned = re.sub(pattern, "", text)
+
     # 清理富文本标签（如图片HTML标签）
-    cleaned = re.sub(r'<[^>]+>', '', cleaned)
-    
+    cleaned = re.sub(r"<[^>]+>", "", cleaned)
+
     return cleaned.strip()
 
 
@@ -69,47 +69,49 @@ def get_mood_description(mood_value: int) -> str:
 def _check_is_repetition(group_id: int, reply_text: str) -> bool:
     """
     检查回复是否是复读（与最近5条回复重复）
-    
+
     Args:
         group_id: 群组ID
         reply_text: 要检查的回复文本
-        
+
     Returns:
         True 如果是复读，False 否则
     """
     # 清理文本以便比较
     cleaned_text = clean_reply_format(reply_text).lower().strip()
-    
+
     # 获取该群组的最近回复
     if group_id not in _recent_replies_cache:
         _recent_replies_cache[group_id] = deque(maxlen=5)
-    
+
     recent_replies = _recent_replies_cache[group_id]
-    
+
     # 检查是否重复
     for recent in recent_replies:
         if cleaned_text == recent.lower().strip():
             logger.info(f"[防复读] 检测到复读: '{reply_text}' 与最近回复重复")
             return True
-    
+
     return False
 
 
 def _record_reply(group_id: int, reply_text: str) -> None:
     """
     记录回复到缓存
-    
+
     Args:
         group_id: 群组ID
         reply_text: 回复文本
     """
     cleaned_text = clean_reply_format(reply_text).strip()
-    
+
     if group_id not in _recent_replies_cache:
         _recent_replies_cache[group_id] = deque(maxlen=5)
-    
+
     _recent_replies_cache[group_id].append(cleaned_text)
-    logger.debug(f"[防复读] 已记录回复: '{cleaned_text[:30]}...' (群{group_id}, 缓存大小: {len(_recent_replies_cache[group_id])})")
+    logger.debug(
+        f"[防复读] 已记录回复: '{cleaned_text[:30]}...' (群{group_id}, 缓存大小: {len(_recent_replies_cache[group_id])})"
+    )
 
 
 async def get_chat_reply(
@@ -585,15 +587,17 @@ async def get_chat_reply(
             for tool_msg in tool_result_messages:
                 tool_messages.append(tool_msg)
                 logger.debug(f"工具消息已添加到列表，当前 tool_messages 长度: {len(tool_messages)}")
-            
+
             # 添加用户提示，要求基于工具结果生成回复
             # 重要：必须包含用户的原始问题，否则模型不知道要回答什么
-            tool_messages.append({
-                "role": "user",
-                "content": f"工具已执行完毕。用户的问题是：{current_msg}\n\n"
-                f"现在请直接回答用户的问题（5-15字），基于工具返回的信息和你的知识。\n"
-                f"重要：不要再次调用任何工具，不要解释工具返回的内容，直接回答问题即可。"
-            })
+            tool_messages.append(
+                {
+                    "role": "user",
+                    "content": f"工具已执行完毕。用户的问题是：{current_msg}\n\n"
+                    f"现在请直接回答用户的问题（5-15字），基于工具返回的信息和你的知识。\n"
+                    f"重要：不要再次调用任何工具，不要解释工具返回的内容，直接回答问题即可。",
+                }
+            )
 
             # 记录完整的消息列表用于诊断（debug级别）
             logger.debug(f"第二轮 LLM 调用前完整消息列表 ({len(tool_messages)} 条消息):")
@@ -631,9 +635,7 @@ async def get_chat_reply(
             )
 
             # 优先使用最终回复
-            final_content = (
-                tool_reply_content if tool_reply_content else tool_reasoning_content
-            )
+            final_content = tool_reply_content if tool_reply_content else tool_reasoning_content
             final_content = final_content.strip()
 
             # 诊断：如果工具调用后没有内容，记录详细信息
@@ -674,9 +676,9 @@ async def get_chat_reply(
         # 正确格式应该是 [回复]，但 AI 可能会模仿用户输入的格式
         # 清理回复标签格式：将 [回复]用户名:内容 转换为 [回复]内容
         # 匹配：[回复]xxx: 或 [回复@xxx: 或 [回复@xxx ]:
-        final_content = re.sub(r'\[回复\][^:]*:', '[回复]', final_content)
-        final_content = re.sub(r'\[回复@[^:]+:\s*', '[回复]', final_content)
-        
+        final_content = re.sub(r"\[回复\][^:]*:", "[回复]", final_content)
+        final_content = re.sub(r"\[回复@[^:]+:\s*", "[回复]", final_content)
+
         # 移除可能的 "self:" 或 "听风:" 前缀
         if final_content.startswith("self:"):
             final_content = final_content[5:].strip()
@@ -684,7 +686,7 @@ async def get_chat_reply(
             final_content = final_content[len(bot_config.bot_name) + 1 :].strip()
 
         # 清理富文本标签（如图片HTML标签）
-        final_content = re.sub(r'<[^>]+>', '', final_content).strip()
+        final_content = re.sub(r"<[^>]+>", "", final_content).strip()
 
         # 防复读检查：检查是否与最近5条回复重复
         if final_content and _check_is_repetition(group_id, final_content):

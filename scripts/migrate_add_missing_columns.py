@@ -4,6 +4,7 @@
 执行方式：
     python scripts/migrate_add_missing_columns.py
 """
+
 import asyncio
 import sys
 from pathlib import Path
@@ -33,9 +34,7 @@ async def migrate():
 
             if "last_vibe_update" not in column_names:
                 logger.info("检测到缺失 last_vibe_update 字段，正在添加...")
-                await cursor.execute(
-                    "ALTER TABLE bot_personality ADD COLUMN last_vibe_update DATETIME"
-                )
+                await cursor.execute("ALTER TABLE bot_personality ADD COLUMN last_vibe_update DATETIME")
                 logger.success("成功添加 last_vibe_update 字段")
             else:
                 logger.info("last_vibe_update 字段已存在，跳过")

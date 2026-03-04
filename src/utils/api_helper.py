@@ -1,6 +1,7 @@
 """
 AI API 调用辅助工具：提供统一的超时处理和错误恢复机制
 """
+
 import asyncio
 from typing import Any, Dict, Optional
 from openai import AsyncOpenAI
@@ -13,13 +14,14 @@ logger = get_logger(__name__)
 
 class APICallResult:
     """API 调用结果封装"""
+
     def __init__(
         self,
         success: bool,
         content: str = "",
         error: Optional[str] = None,
         has_thinking: bool = False,
-        thinking: str = ""
+        thinking: str = "",
     ):
         self.success = success
         self.content = content
@@ -52,18 +54,11 @@ async def call_ai_with_timeout(
     """
     creds = ai_config_manager.get_model_credentials(model_alias)
     if not creds:
-        return APICallResult(
-            success=False,
-            error=f"无法获取模型 {model_alias} 的凭据"
-        )
+        return APICallResult(success=False, error=f"无法获取模型 {model_alias} 的凭据")
 
     @retry_on_timeout(max_retries=max_retries, base_delay=1.0, max_delay=5.0)
     async def _make_call():
-        client = AsyncOpenAI(
-            api_key=creds["api_key"],
-            base_url=creds["base_url"],
-            timeout=timeout
-        )
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=timeout)
 
         if use_stream:
             response = await client.chat.completions.create(
@@ -98,7 +93,7 @@ async def call_ai_with_timeout(
                 success=True,
                 content=stream_result["content"],
                 has_thinking=stream_result["has_thinking"],
-                thinking=stream_result["thinking"]
+                thinking=stream_result["thinking"],
             )
         else:
             from src.utils.thinking_mode import thinking_handler
@@ -108,16 +103,13 @@ async def call_ai_with_timeout(
                 success=True,
                 content=response_result["content"],
                 has_thinking=response_result["has_thinking"],
-                thinking=response_result["thinking"]
+                thinking=response_result["thinking"],
             )
 
     except Exception as e:
         error_msg = str(e)
         logger.error(f"AI 调用失败 ({model_alias}): {error_msg}")
-        return APICallResult(
-            success=False,
-            error=error_msg
-        )
+        return APICallResult(success=False, error=error_msg)
 
 
 async def call_ai_with_timeout_and_json(
@@ -142,11 +134,7 @@ async def call_ai_with_timeout_and_json(
 
     @retry_on_timeout(max_retries=max_retries, base_delay=1.0, max_delay=5.0)
     async def _make_call():
-        client = AsyncOpenAI(
-            api_key=creds["api_key"],
-            base_url=creds["base_url"],
-            timeout=timeout
-        )
+        client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=timeout)
 
         return await openai_compat.create_with_auto_fallback(
             client=client,
@@ -162,6 +150,7 @@ async def call_ai_with_timeout_and_json(
         response = await _make_call()
 
         from src.utils.thinking_mode import thinking_handler
+
         response_result = thinking_handler.process_non_streaming_response(response)
         result_text = response_result["content"]
 

@@ -94,13 +94,13 @@ class ContextManager:
         # 优先保留 system 消息（包含重要指令），然后保留最近的 user 消息
         system_messages = [msg for msg in messages if msg.get("role") == "system"]
         other_messages = [msg for msg in messages if msg.get("role") != "system"]
-        
+
         # 计算 system 消息占用的 tokens
         system_tokens = self.count_messages_tokens(system_messages, model_alias)
-        
+
         truncated_messages = []
         current_tokens = 0
-        
+
         # 1. 首先添加所有 system 消息
         if system_tokens <= available_tokens:
             truncated_messages.extend(system_messages)
@@ -114,11 +114,11 @@ class ContextManager:
                     current_tokens += msg_tokens
                 else:
                     break
-        
+
         # 2. 然后从后往前添加其他消息（保留最近的上下文）
         for msg in reversed(other_messages):
             msg_tokens = self.count_tokens(msg.get("content", ""), model_alias)
-            
+
             if current_tokens + msg_tokens <= available_tokens:
                 truncated_messages.append(msg)
                 current_tokens += msg_tokens

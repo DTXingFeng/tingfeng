@@ -9,13 +9,15 @@ try:
     cursor = conn.cursor()
 
     # 查询最近的聊天记录
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT group_id, msg, timestamp
         FROM chat_history
         WHERE group_id = 472765283
         ORDER BY timestamp DESC
         LIMIT 100
-    """)
+    """
+    )
 
     rows = cursor.fetchall()
 
@@ -42,14 +44,16 @@ try:
     print("=" * 100)
 
     # 特别标记：查找bot的回复
-    cursor.execute("""
+    cursor.execute(
+        """
         SELECT msg, timestamp
         FROM chat_history
         WHERE group_id = 472765283
         AND (msg LIKE 'self:%' OR msg LIKE '听风:%')
         ORDER BY timestamp DESC
         LIMIT 20
-    """)
+    """
+    )
 
     bot_replies = cursor.fetchall()
     print("\n\n最近20条bot回复：")
@@ -69,4 +73,5 @@ try:
 except Exception as e:
     print(f"错误: {e}", file=sys.stderr)
     import traceback
+
     traceback.print_exc()

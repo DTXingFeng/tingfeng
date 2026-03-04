@@ -1,6 +1,7 @@
 """
 重试装饰器：用于处理不稳定的网络和 API 调用
 """
+
 import asyncio
 import functools
 from typing import Callable, TypeVar, Any, Optional
@@ -8,7 +9,7 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 def retry_on_timeout(
@@ -31,6 +32,7 @@ def retry_on_timeout(
     Returns:
         装饰后的函数
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> T:
@@ -45,15 +47,12 @@ def retry_on_timeout(
 
                     if attempt < max_retries:
                         logger.warning(
-                            f"{func.__name__} 超时 (尝试 {attempt + 1}/{max_retries + 1})，"
-                            f"{delay:.1f}秒后重试..."
+                            f"{func.__name__} 超时 (尝试 {attempt + 1}/{max_retries + 1})，" f"{delay:.1f}秒后重试..."
                         )
                         await asyncio.sleep(min(delay, max_delay))
                         delay *= backoff_factor
                     else:
-                        logger.error(
-                            f"{func.__name__} 达到最大重试次数 ({max_retries})，仍然失败"
-                        )
+                        logger.error(f"{func.__name__} 达到最大重试次数 ({max_retries})，仍然失败")
 
             raise last_exception
 
@@ -70,15 +69,12 @@ def retry_on_timeout(
 
                     if attempt < max_retries:
                         logger.warning(
-                            f"{func.__name__} 超时 (尝试 {attempt + 1}/{max_retries + 1})，"
-                            f"{delay:.1f}秒后重试..."
+                            f"{func.__name__} 超时 (尝试 {attempt + 1}/{max_retries + 1})，" f"{delay:.1f}秒后重试..."
                         )
                         time.sleep(min(delay, max_delay))
                         delay *= backoff_factor
                     else:
-                        logger.error(
-                            f"{func.__name__} 达到最大重试次数 ({max_retries})，仍然失败"
-                        )
+                        logger.error(f"{func.__name__} 达到最大重试次数 ({max_retries})，仍然失败")
 
             raise last_exception
 
@@ -124,14 +120,11 @@ def retry_on_api_error(
 
                     if attempt < max_retries:
                         logger.warning(
-                            f"{func.__name__} 出错 (尝试 {attempt + 1}/{max_retries + 1}): {e}，"
-                            f"重试中..."
+                            f"{func.__name__} 出错 (尝试 {attempt + 1}/{max_retries + 1}): {e}，" f"重试中..."
                         )
                         await asyncio.sleep(1)
                     else:
-                        logger.error(
-                            f"{func.__name__} 达到最大重试次数 ({max_retries})，仍然失败: {e}"
-                        )
+                        logger.error(f"{func.__name__} 达到最大重试次数 ({max_retries})，仍然失败: {e}")
 
             raise last_exception
 

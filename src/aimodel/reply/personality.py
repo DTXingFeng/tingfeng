@@ -119,6 +119,11 @@ class PersonalityManager:
                 text=thought_prompt, model_alias=model_alias, max_output_tokens=150
             )
 
+            # 验证 prompt 不为空
+            if not optimized_prompt or len(optimized_prompt.strip()) < 10:
+                logger.warning(f"内心独白 prompt 过短或为空，跳过调用 (tokens: {prompt_tokens})")
+                return ""
+
             stream = await client.chat.completions.create(
                 model=creds["model"],
                 messages=[{"role": "system", "content": optimized_prompt}],
@@ -139,7 +144,7 @@ class PersonalityManager:
             await db_manager.update_personality_state(group_id, thoughts=thoughts)
             return thoughts
         except Exception as e:
-            error_msg = str(e)
+            error_msg = repr(e)
             logger.error(f"生成内心独白失败: {error_msg}", exc_info=True)
             return ""
 
@@ -274,6 +279,11 @@ class PersonalityManager:
                 text=schedule_prompt, model_alias=model_alias, max_output_tokens=1000
             )
 
+            # 验证 prompt 不为空
+            if not optimized_prompt or len(optimized_prompt.strip()) < 10:
+                logger.warning(f"作息表生成 prompt 过短或为空，跳过调用 (tokens: {prompt_tokens})")
+                return []
+
             # 使用兼容性工具自动处理 response_format
             stream = await openai_compat.create_with_auto_fallback(
                 client=client,
@@ -344,7 +354,7 @@ class PersonalityManager:
 
             return valid_schedule
         except Exception as e:
-            error_msg = str(e)
+            error_msg = repr(e)
             logger.error(f"生成每日作息表失败: {error_msg}", exc_info=True)
             return []
 
@@ -385,6 +395,11 @@ class PersonalityManager:
             optimized_prompt, prompt_tokens = context_manager.truncate_text(
                 text=mimicry_prompt, model_alias=model_alias, max_output_tokens=500
             )
+
+            # 验证 prompt 不为空
+            if not optimized_prompt or len(optimized_prompt.strip()) < 10:
+                logger.warning(f"风格捕捉 prompt 过短或为空，跳过调用 (tokens: {prompt_tokens})")
+                return
 
             # 使用兼容性工具自动处理 response_format
             stream = await openai_compat.create_with_auto_fallback(
@@ -437,7 +452,7 @@ class PersonalityManager:
                             await db_manager.add_style_pattern(group_id, context, style)
 
         except Exception as e:
-            error_msg = str(e)
+            error_msg = repr(e)
             logger.error(f"风格捕捉失败: {error_msg}", exc_info=True)
 
     async def mine_slang(self, group_id: int, history: List[str]):
@@ -519,6 +534,11 @@ class PersonalityManager:
                 text=mining_prompt, model_alias=model_alias, max_output_tokens=500
             )
 
+            # 验证 prompt 不为空
+            if not optimized_prompt or len(optimized_prompt.strip()) < 10:
+                logger.warning(f"黑话挖掘 prompt 过短或为空，跳过调用 (tokens: {prompt_tokens})")
+                return
+
             # 使用兼容性工具自动处理 response_format
             stream = await openai_compat.create_with_auto_fallback(
                 client=client,
@@ -574,7 +594,7 @@ class PersonalityManager:
                             await self._refine_slang_definition(group_id, phrase)
 
         except Exception as e:
-            error_msg = str(e)
+            error_msg = repr(e)
             logger.error(f"黑话挖掘失败: {error_msg}", exc_info=True)
 
     def _is_valid_slang_candidate(self, phrase: str, definition: str, context: str) -> bool:
@@ -763,6 +783,11 @@ class PersonalityManager:
                 text=vibe_prompt, model_alias=model_alias, max_output_tokens=300
             )
 
+            # 验证 prompt 不为空
+            if not optimized_prompt or len(optimized_prompt.strip()) < 10:
+                logger.warning(f"群聊氛围分析 prompt 过短或为空，跳过调用 (tokens: {prompt_tokens})")
+                return
+
             # 使用兼容性工具自动处理 response_format
             stream = await openai_compat.create_with_auto_fallback(
                 client=client,
@@ -804,7 +829,7 @@ class PersonalityManager:
                 )
 
         except Exception as e:
-            error_msg = str(e)
+            error_msg = repr(e)
             logger.error(f"更新群聊氛围失败: {error_msg}", exc_info=True)
 
 
