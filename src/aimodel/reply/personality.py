@@ -594,8 +594,7 @@ class PersonalityManager:
                             await self._refine_slang_definition(group_id, phrase)
 
         except Exception as e:
-            error_msg = repr(e)
-            logger.error(f"黑话挖掘失败: {error_msg}", exc_info=True)
+            logger.error("黑话挖掘失败", exc_info=True)
 
     def _is_valid_slang_candidate(self, phrase: str, definition: str, context: str) -> bool:
         """

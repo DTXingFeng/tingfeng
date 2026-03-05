@@ -133,12 +133,6 @@ async def should_i_reply(
         history_messages.append(clean_msg)
         history_message_ids.append(item["message_id"])
 
-    # 构建带索引的历史消息，方便 AI 选择
-    history_with_index = []
-    for idx, msg in enumerate(history_messages):
-        history_with_index.append(f"[{idx}] {msg}")
-    history_str = "\n".join(history_with_index)
-
     # 3. 检索相关记忆与知识
     user_profile = await db_manager.get_user_impression(group_id, user_id) if user_id else None
     user_specific_memories = await db_manager.get_user_specific_memories(group_id, user_id, limit=3) if user_id else []
@@ -187,8 +181,76 @@ async def should_i_reply(
 
     memory_str = "\n".join(memory_context) if memory_context else "暂无相关背景记忆。"
 
-    # 4. 构造决策 Prompt
-    max_idx = len(history) - 1  # 历史消息的最大索引
+    # 构建带索引的历史消息
+    history_with_index = []
+    for idx, msg in enumerate(history_messages):
+        history_with_index.append(f"[{idx}] {msg}")
+    history_str = "\n".join(history_with_index)
+
+    # 4. 场景智能分析（基于规则的轻量级提示）
+    def analyze_conversation_context() -> dict:
+        """
+        分析对话上下文，提供场景判断的辅助信息
+
+        Returns:
+            包含上下文分析的字典
+        """
+        if not history_messages:
+            return {"has_bot_msg_recently": False, "bot_msg_position": None, "suggested_scene": "C"}
+
+        # 检查最近5条消息中bot发言的位置
+        bot_msg_indices = []
+        for i in range(min(5, len(history_messages))):
+            msg = history_messages[-(i + 1)]
+            if msg.startswith(f"{bot_config.bot_name}:") or msg.startswith(f"{bot_config.bot_name} "):
+                bot_msg_indices.append(len(history_messages) - 1 - i)
+
+        if not bot_msg_indices:
+            # 最近没有bot发言
+            suggested_scene = "B" if is_at_me or bot_config.bot_name in current_msg else "C"
+            return {"has_bot_msg_recently": False, "bot_msg_position": None, "suggested_scene": suggested_scene}
+
+        # 有bot发言，分析对话流向
+        last_bot_idx = bot_msg_indices[0]  # 最近一次bot发言的位置
+        messages_after_bot = len(history_messages) - last_bot_idx - 1  # bot发言后的消息数
+
+        context_hint = ""
+        if messages_after_bot <= 2:
+            # bot发言后只有1-2条消息，很可能是在回应bot
+            context_hint = "bot发言后紧接着1-2条消息，很可能是对bot的回应"
+            suggested_scene = "A"
+        elif messages_after_bot <= 4:
+            # bot发言后有3-4条消息，需要看话题是否延续
+            context_hint = "bot发言后有3-4条消息，需要判断话题是否延续"
+            suggested_scene = "unknown"  # 让AI自己判断
+        else:
+            # bot发言后超过4条消息，对话可能已经转向
+            context_hint = "bot发言后已有较多消息，对话可能已经转向其他话题"
+            suggested_scene = "C"
+
+        return {
+            "has_bot_msg_recently": True,
+            "bot_msg_position": last_bot_idx,
+            "messages_after_bot": messages_after_bot,
+            "context_hint": context_hint,
+            "suggested_scene": suggested_scene,
+        }
+
+    # 分析对话上下文
+    context_analysis = analyze_conversation_context()
+
+    # 构建带索引的历史消息（bot的消息添加★标记）
+    history_with_index = []
+    for idx, msg in enumerate(history_messages):
+        marked_msg = msg
+        # 给bot的消息添加显式标记
+        if msg.startswith(f"{bot_config.bot_name}:") or msg.startswith(f"{bot_config.bot_name} "):
+            marked_msg = f"★ {msg}"
+        history_with_index.append(f"[{idx}] {marked_msg}")
+    history_str = "\n".join(history_with_index)
+    
+    # 计算最大索引
+    max_idx = len(history_messages) - 1 if history_messages else 0
 
     # 判断对话参与类型（用于更精确的决策）
     conversation_type = "unknown"
@@ -205,25 +267,36 @@ async def should_i_reply(
             conversation_type = "group_chat"
 
     # 检查最近的发言是否来自机器人自己
-    bot_recently_spoke = False
-    if len(history_messages) > 0:
-        for msg in reversed(history_messages[-3:]):
-            if msg.startswith(bot_config.bot_name + ":") or msg.startswith(f"{bot_config.bot_name}:"):
-                bot_recently_spoke = True
-                break
+    bot_recently_spoke = context_analysis["has_bot_msg_recently"]
 
     prompt = (
         f"你是'{bot_config.bot_name}'的决策大脑。当前状态：心情{current_mood_val}/100，性格{json.dumps(traits, ensure_ascii=False)}，最近想法：{recent_thoughts}\n"
-        f"对话类型：{conversation_type}，最近发言：{'是' if bot_recently_spoke else '否'}\n\n"
+        f"对话类型：{conversation_type}，最近发言：{'是' if bot_recently_spoke else '否'}\n"
+        f"### 对话上下文分析：\n"
+        f"- 最近是否有bot发言：{'是' if context_analysis['has_bot_msg_recently'] else '否'}\n"
+        + (
+            f"- Bot发言后消息数：{context_analysis['messages_after_bot']}\n"
+            f"- 上下文提示：{context_analysis['context_hint']}\n"
+            if context_analysis["has_bot_msg_recently"]
+            else ""
+        )
+        + f"- 系统建议场景：{context_analysis['suggested_scene']} (仅供参考，请自行判断)\n"
+        f"{'⚠️ 提示：根据上下文分析，当前消息很可能是在延续你之前的对话，请优先考虑场景A！' if context_analysis['suggested_scene'] == 'A' else ''}\n\n"
         f"### 记忆：\n{memory_str}\n{slang_context}\n\n"
         "### 任务：\n"
-        "1. 判断对话场景（A/B/C），选择最值得回复的消息（可以是历史中的任何一条）\n"
+        "1. 判断对话场景（A/B/C），选择最值得回复的消息\n"
         "2. 决定是否回复，评估心情影响\n\n"
         "### 场景判断（核心）：\n"
-        "**A. 正在和你对话**（0.5-0.95分）：历史有你的发言，当前消息在回应/延续你的话。优先回复。\n"
-        "**B. 提到你但未对话**（0.1-0.5分）：被作为话题讨论，谨慎插话。\n"
-        "**C. 完全无关**（0.0-0.7分）：他人交流，必须有强关联记忆才考虑参与：\n"
-        "   - **强关联记忆**（必须满足至少一条）\n"
+        "**A. 正在和你对话**（0.5-0.95分）：满足以下任一条件即判定为场景A：\n"
+        "   - 最近1-2条消息在直接回应你的发言（追问、反驳、补充、确认等）\n"
+        "   - 话题自然延续，用户在回应你的话或继续讨论你提到的话题\n"
+        "   - **关键**：如果bot发言后只有1-2条消息，很可能是对话延续；如果已有5+条消息，可能已转向\n"
+        "   - 优先回复，这是参与对话的最佳时机\n"
+        "**B. 提到你但未对话**（0.1-0.5分）：被作为话题讨论，但你未参与，谨慎插话。\n"
+        "**C. 完全无关**（0.0-0.7分）：满足以下条件才判定为场景C：\n"
+        "   - 最近多条消息中没有你的发言，或你的发言是很久之前的插话\n"
+        "   - 话题自始至终由他人发起和延续，不涉及你\n"
+        "   - 必须有强关联记忆才考虑参与：\n"
         "     * 记忆中明确提到过该话题/关键词\n"
         "     * 记忆中与当前消息内容高度相关（相同事件、相似经历）\n"
         "     * 有明确的用户印象或往事与此话题直接相关\n"
@@ -233,7 +306,7 @@ async def should_i_reply(
         "     * 无关联记忆：0分（绝不参与）\n"
         "   - 只能说'哈哈''厉害'这种废话 → 即使有记忆也不参与\n"
         "   - 默认沉默，有强关联记忆且有料才说\n"
-        "   - **关键约束**：即使满足上述条件，也必须遵守你的人设风格（极简自然、符合性格），绝对不能为了参与而参与导致表现人机感\n\n"
+        "   - **特别注意**：如果历史中看到★ [你的发言]标记，要判断对话是否还在延续，而不是机械地归类为C\n\n"
         "### 核心原则：\n"
         "- **沉默是金**：默认不回复，你是真人不是助手，不需要对每件事都评论\n"
         "- **指代消歧**：历史中的'你'需要判断是否指你。用户A↔用户B的快速来回，他们的'你'互相指代，不是在叫你\n"
@@ -406,6 +479,12 @@ async def should_i_reply(
 
         decision = json.loads(content)
 
+        # 记录AI判断的场景（仅用于日志分析）
+        ai_detected_scene = decision.get("conversation_scene", "C")
+        suggested_scene = context_analysis.get("suggested_scene", "C")
+        if ai_detected_scene != suggested_scene and suggested_scene != "unknown":
+            logger.info(f"场景判断差异：系统建议={suggested_scene}，AI判断={ai_detected_scene}（已采用AI判断）")
+
         # 结果解析
         should_reply = decision.get("should_reply", False)
 
@@ -458,8 +537,13 @@ async def should_i_reply(
         }
         scene_desc = scene_descriptions.get(conversation_scene, "未知场景")
 
+        # 构建上下文提示（用于日志）
+        context_info = ""
+        if context_analysis["has_bot_msg_recently"]:
+            context_info = f" [Bot后{context_analysis['messages_after_bot']}条]"
+
         print(
-            f"决策引擎: [场景:{conversation_scene}({scene_desc})] [回复:{should_reply}] [目标消息:{target_message_index}] [消息ID:{selected_message_id}] [对象:{reply_to_user}] [内容:{target_message_content[:30]}...] [兴趣:{interest_score}] [心情:{mood_impact:+}] [理由:{decision.get('reason')}]"
+            f"决策引擎: [场景:{conversation_scene}({scene_desc}){context_info}] [回复:{should_reply}] [目标消息:{target_message_index}] [消息ID:{selected_message_id}] [对象:{reply_to_user}] [内容:{target_message_content[:30]}...] [兴趣:{interest_score}] [心情:{mood_impact:+}] [理由:{decision.get('reason')}]"
         )
 
         return {

@@ -473,13 +473,11 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     """
     当接收到群消息时，NoneBot 会调用这个方法。
     """
-    # 0. 群组过滤 (白名单/黑名单)
-    group_id = event.group_id
-    if bot_config.blocked_groups and group_id in bot_config.blocked_groups:
-        return  # 黑名单群组直接忽略
+    # 注意：白名单/黑名单检查已在 bot.py 的事件预处理阶段完成
+    # 这里的消息已经通过了白名单检查
 
-    if bot_config.allowed_groups and group_id not in bot_config.allowed_groups:
-        return  # 不在白名单中的群组直接忽略
+    group_id = event.group_id
+    logger.debug(f"处理群 {group_id} 的消息")
 
     # 1. 基础信息
     message_id = event.message_id  # 消息 ID
@@ -597,6 +595,18 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     is_mentioned = bot_config.bot_name in message_text
     is_actively_engaged = is_at_me or is_mentioned
 
+    # 调试日志：记录艾特检测和消息段
+    logger.info(
+        f"[艾特检测] 群{group_id} is_at_me={is_at_me}, is_mentioned={is_mentioned}, "
+        f"is_actively_engaged={is_actively_engaged}, event.is_tome()={event.is_tome()}"
+    )
+
+    # 调试：打印消息段信息
+    message_segments = []
+    for seg in event.get_message():
+        message_segments.append(f"{seg.type}:{seg.data}")
+    logger.debug(f"[消息段] 群{group_id} 消息段: {message_segments}")
+
     # 将当前消息上下文加入待处理队列（用于并发安全的延迟决策）
     # 注意：只有非艾特消息才加入延迟队列，因为艾特消息会立即处理
     if not is_actively_engaged:
@@ -630,6 +640,7 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     is_sticker_msg = len(stickers) > 0
 
     if is_actively_engaged:
+        logger.info(f"[艾特处理] 群{group_id} 检测到艾特，准备立即处理")
         # 1. 被显式叫到了，肯定要回
         # 更新强行唤醒时间，进入 5 分钟关注期
         last_wake_up_times[group_id] = time.time()

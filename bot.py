@@ -42,6 +42,19 @@ async def stop_non_group_message(event: MessageEvent):
     if not isinstance(event, GroupMessageEvent):
         raise IgnoredException("Global ignored: not a group message")
 
+    # 白名单/黑名单过滤
+    from src.config.config import bot_config
+
+    group_id = event.group_id
+
+    # 黑名单检查
+    if bot_config.blocked_groups and group_id in bot_config.blocked_groups:
+        raise IgnoredException(f"Group {group_id} is in blacklist")
+
+    # 白名单检查
+    if bot_config.allowed_groups and group_id not in bot_config.allowed_groups:
+        raise IgnoredException(f"Group {group_id} is not in whitelist")
+
 
 # 加载内置插件
 nonebot.load_builtin_plugins("echo")
@@ -72,6 +85,23 @@ async def init_creator_memory():
         await initialize_all_groups()
     except Exception as e:
         print(f"初始化创造者记忆失败: {e}")
+
+
+@driver.on_startup
+async def print_whitelist_config():
+    """启动时打印白名单配置"""
+    try:
+        from src.config.config import bot_config
+
+        print(f"\n{'='*60}")
+        print(f"白名单配置:")
+        print(f"  - 白名单群组: {bot_config.allowed_groups if bot_config.allowed_groups else '未设置（允许所有群组）'}")
+        print(f"  - 黑名单群组: {bot_config.blocked_groups if bot_config.blocked_groups else '未设置'}")
+        print(f"  - 决策间隔: {bot_config.decision_interval} 秒")
+        print(f"  - 作息表: {'启用' if bot_config.enable_schedule else '禁用'}")
+        print(f"{'='*60}\n")
+    except Exception as e:
+        print(f"打印白名单配置失败: {e}")
 
 
 if __name__ == "__main__":

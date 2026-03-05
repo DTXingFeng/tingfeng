@@ -12,6 +12,9 @@ class BasePersonalityConfig(BaseModel):
     base_patterns: List[str] = Field(default_factory=list)  # 基础口癖
     group_feature_probability: float = 0.3  # 使用群特色的概率（0-1），越小越保守
 
+    class Config:
+        arbitrary_types_allowed = True
+
 
 class BotConfig(BaseModel):
     bot_name: str = "听风"
@@ -33,6 +36,8 @@ class BotConfig(BaseModel):
 
     class Config:
         arbitrary_types_allowed = True
+        # 确保配置文件的值优先于默认值
+        extra = "ignore"
 
 
 class ConfigManager:
@@ -83,5 +88,5 @@ from src.utils.logger import get_logger
 
 startup_logger = get_logger(__name__)
 startup_logger.info(
-    f"配置加载完成: decision_interval={bot_config.decision_interval}秒, interest_threshold={bot_config.interest_threshold}, reply_rate={bot_config.reply_rate}"
+    f"配置加载完成: decision_interval={bot_config.decision_interval}秒, interest_threshold={bot_config.interest_threshold}, reply_rate={bot_config.reply_rate}, enable_schedule={bot_config.enable_schedule}, allowed_groups={bot_config.allowed_groups}"
 )
