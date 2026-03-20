@@ -132,9 +132,10 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
 
     # 6. 发送请求
     try:
-        response = await client.chat.completions.create(
-            model=creds["model"],
-            messages=[
+        # 构建请求参数
+        request_params = {
+            "model": creds["model"],
+            "messages": [
                 {
                     "role": "user",
                     "content": [
@@ -146,7 +147,13 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
                     ],
                 }
             ],
-        )
+        }
+
+        # 如果配置了 enable_thinking=False，添加到请求参数
+        if creds.get("enable_thinking") is False:
+            request_params["extra_body"] = {"enable_thinking": False}
+
+        response = await client.chat.completions.create(**request_params)
 
         # 使用思考模式处理器处理响应
         response_result = thinking_handler.process_non_streaming_response(response)

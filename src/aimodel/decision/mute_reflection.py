@@ -99,14 +99,21 @@ async def reflect_on_mute(
 
 现在，开始你的反思："""
 
-        response = await client.chat.completions.create(
-            model=creds["model"],
-            messages=[
+        # 构建请求参数
+        request_params = {
+            "model": creds["model"],
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": "我被禁言了，帮我反思一下原因。"},
             ],
-            temperature=0.8,
-        )
+            "temperature": 0.8,
+        }
+
+        # 如果配置了 enable_thinking=False，添加到请求参数
+        if creds.get("enable_thinking") is False:
+            request_params["extra_body"] = {"enable_thinking": False}
+
+        response = await client.chat.completions.create(**request_params)
 
         # 使用思考模式处理器处理响应
         response_result = thinking_handler.process_non_streaming_response(response)
@@ -273,14 +280,21 @@ async def generate_mute_response(group_id: int, reflection_data: dict[str, Any])
 
 现在，生成你的发言："""
 
-        response = await client.chat.completions.create(
-            model=creds["model"],
-            messages=[
+        # 构建请求参数
+        request_params = {
+            "model": creds["model"],
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": "我被解禁了，说点什么吧。"},
             ],
-            temperature=0.9,
-        )
+            "temperature": 0.9,
+        }
+
+        # 如果配置了 enable_thinking=False，添加到请求参数
+        if creds.get("enable_thinking") is False:
+            request_params["extra_body"] = {"enable_thinking": False}
+
+        response = await client.chat.completions.create(**request_params)
 
         # 使用思考模式处理器处理响应
         response_result = thinking_handler.process_non_streaming_response(response)

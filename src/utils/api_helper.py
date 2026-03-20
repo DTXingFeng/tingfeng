@@ -60,21 +60,23 @@ async def call_ai_with_timeout(
     async def _make_call():
         client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=timeout)
 
+        # 构建基础请求参数
+        request_params = {
+            "model": creds["model"],
+            "messages": messages,
+            "temperature": temperature,
+            "stream": use_stream,
+        }
+
+        # 如果配置了 enable_thinking=False，添加到 extra_body
+        if creds.get("enable_thinking") is False:
+            request_params["extra_body"] = {"enable_thinking": False}
+
         if use_stream:
-            response = await client.chat.completions.create(
-                model=creds["model"],
-                messages=messages,
-                temperature=temperature,
-                stream=True,
-            )
+            response = await client.chat.completions.create(**request_params)
             return response, True
         else:
-            response = await client.chat.completions.create(
-                model=creds["model"],
-                messages=messages,
-                temperature=temperature,
-                stream=False,
-            )
+            response = await client.chat.completions.create(**request_params)
             return response, False
 
     try:
@@ -144,6 +146,7 @@ async def call_ai_with_timeout_and_json(
             use_response_format=True,
             stream=False,
             temperature=temperature,
+            enable_thinking=creds.get("enable_thinking"),
         )
 
     try:

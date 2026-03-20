@@ -444,6 +444,10 @@ async def get_chat_reply(
             "stream": True,
         }
 
+        # 如果配置了 enable_thinking=False，添加到请求参数
+        if creds.get("enable_thinking") is False:
+            stream_params["extra_body"] = {"enable_thinking": False}
+
         if mcp_tools:
             stream_params["tools"] = mcp_tools
             stream_params["tool_choice"] = "auto"

@@ -84,11 +84,18 @@ async def consolidate_memories(group_id: int):
 
             optimized_prompt = prompt + f"\n\n### 聊天记录：\n{chat_content}\n\n### 提取结果："
 
-            response = await client.chat.completions.create(
-                model=creds["model"],
-                messages=[{"role": "user", "content": optimized_prompt}],
-                temperature=0.3,
-            )
+            # 构建请求参数
+            request_params = {
+                "model": creds["model"],
+                "messages": [{"role": "user", "content": optimized_prompt}],
+                "temperature": 0.3,
+            }
+
+            # 如果配置了 enable_thinking=False，添加到请求参数
+            if creds.get("enable_thinking") is False:
+                request_params["extra_body"] = {"enable_thinking": False}
+
+            response = await client.chat.completions.create(**request_params)
 
             # 使用思考模式处理器处理响应
             response_result = thinking_handler.process_non_streaming_response(response)

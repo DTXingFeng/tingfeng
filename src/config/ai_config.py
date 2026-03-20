@@ -15,6 +15,7 @@ class ModelConfig(BaseModel):
     model_name: str
     description: Optional[str] = ""
     max_context_tokens: int = 4096
+    enable_thinking: Optional[bool] = None
 
 
 class AIConfig(BaseModel):
@@ -122,9 +123,9 @@ class AIConfigManager:
             self.load_config()
         return self._config
 
-    def get_model_credentials(self, model_alias: str) -> Optional[Dict[str, str]]:
+    def get_model_credentials(self, model_alias: str) -> Optional[Dict[str, any]]:
         """
-        根据模型别名获取完整的调用凭证 (base_url, api_key, model_name)
+        根据模型别名获取完整的调用凭证 (base_url, api_key, model_name, enable_thinking)
         """
         config = self.config
         if model_alias not in config.models:
@@ -136,7 +137,17 @@ class AIConfigManager:
 
         platform_cfg = config.platforms[model_cfg.platform_alias]
 
-        return {"base_url": platform_cfg.base_url, "api_key": platform_cfg.api_key, "model": model_cfg.model_name}
+        credentials = {
+            "base_url": platform_cfg.base_url,
+            "api_key": platform_cfg.api_key,
+            "model": model_cfg.model_name
+        }
+        
+        # 如果模型配置了 enable_thinking 参数，添加到返回值中
+        if model_cfg.enable_thinking is not None:
+            credentials["enable_thinking"] = model_cfg.enable_thinking
+        
+        return credentials
 
 
 # Global instance

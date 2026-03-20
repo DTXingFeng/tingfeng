@@ -77,6 +77,34 @@ class OpenAICompat:
 
         return False
 
+    def _ensure_messages_format(self, messages: list) -> list:
+        """
+        确保消息格式符合要求（如 GLM 要求必须有 user 角色）
+
+        Args:
+            messages: 原始消息列表
+
+        Returns:
+            list: 修正后的消息列表
+        """
+        if not messages:
+            return messages
+
+        # 检查是否只有 system 消息
+        has_user = any(msg.get("role") == "user" for msg in messages)
+        only_system = len(messages) == 1 and messages[0].get("role") == "system"
+
+        if only_system and not has_user:
+            # 为只有 system 消息的情况添加一个 user 消息
+            # 这样可以兼容 GLM 等要求必须有 user 角色的模型
+            system_content = messages[0].get("content", "")
+            return [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": "请根据上述系统提示词进行分析。"},
+            ]
+
+        return messages
+
     async def create_with_auto_fallback(
         self,
         client: AsyncOpenAI,
@@ -85,6 +113,7 @@ class OpenAICompat:
         base_url: str,
         use_response_format: bool = True,
         stream: bool = False,
+        enable_thinking: Optional[bool] = None,
         **kwargs,
     ):
         """
@@ -97,12 +126,16 @@ class OpenAICompat:
             base_url: API base_url（用于缓存）
             use_response_format: 是否尝试使用 response_format
             stream: 是否使用流式响应
+            enable_thinking: 是否启用思考模式（None=不设置，False=禁用）
             **kwargs: 其他传递给 API 的参数
 
         Returns:
             API 响应对象（streaming 或 non-streaming）
         """
         platform_key = self._get_platform_key(base_url, model)
+
+        # 确保消息格式符合要求（兼容 GLM 等模型）
+        messages = self._ensure_messages_format(messages)
 
         # 检查缓存：如果已知不支持，直接跳过
         if platform_key in self._platform_capabilities:
@@ -119,6 +152,13 @@ class OpenAICompat:
                     "stream": stream,
                     **kwargs,
                 }
+
+                # 如果 enable_thinking=False，添加到 extra_body
+                if enable_thinking is False:
+                    if "extra_body" not in request_params:
+                        request_params["extra_body"] = {}
+                    request_params["extra_body"]["enable_thinking"] = False
+
                 response = await client.chat.completions.create(**request_params)
 
                 # 成功：缓存平台支持信息
@@ -137,6 +177,13 @@ class OpenAICompat:
 
         # 降级尝试：不带 response_format
         request_params = {"model": model, "messages": messages, "stream": stream, **kwargs}
+
+        # 如果 enable_thinking=False，添加到 extra_body
+        if enable_thinking is False:
+            if "extra_body" not in request_params:
+                request_params["extra_body"] = {}
+            request_params["extra_body"]["enable_thinking"] = False
+
         response = await client.chat.completions.create(**request_params)
 
         return response

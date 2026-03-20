@@ -124,12 +124,19 @@ class PersonalityManager:
                 logger.warning(f"内心独白 prompt 过短或为空，跳过调用 (tokens: {prompt_tokens})")
                 return ""
 
-            stream = await client.chat.completions.create(
-                model=creds["model"],
-                messages=[{"role": "system", "content": optimized_prompt}],
-                temperature=0.8,
-                stream=True,
-            )
+            # 构建请求参数
+            stream_params = {
+                "model": creds["model"],
+                "messages": [{"role": "system", "content": optimized_prompt}],
+                "temperature": 0.8,
+                "stream": True,
+            }
+
+            # 如果配置了 enable_thinking=False，添加到请求参数
+            if creds.get("enable_thinking") is False:
+                stream_params["extra_body"] = {"enable_thinking": False}
+
+            stream = await client.chat.completions.create(**stream_params)
 
             # 使用思考模式处理器处理流式响应
             stream_result = await thinking_handler.process_streaming_response(
@@ -144,8 +151,7 @@ class PersonalityManager:
             await db_manager.update_personality_state(group_id, thoughts=thoughts)
             return thoughts
         except Exception as e:
-            error_msg = repr(e)
-            logger.error(f"生成内心独白失败: {error_msg}", exc_info=True)
+            logger.error(f"生成内心独白失败: {str(e)}", exc_info=True)
             return ""
 
     async def get_dynamic_identity(
@@ -354,8 +360,7 @@ class PersonalityManager:
 
             return valid_schedule
         except Exception as e:
-            error_msg = repr(e)
-            logger.error(f"生成每日作息表失败: {error_msg}", exc_info=True)
+            logger.error(f"生成每日作息表失败: {str(e)}", exc_info=True)
             return []
 
     async def capture_style_patterns(self, group_id: int, history: List[str]):
@@ -682,12 +687,19 @@ class PersonalityManager:
                 text=refine_prompt, model_alias=model_alias, max_output_tokens=200
             )
 
-            stream = await client.chat.completions.create(
-                model=creds["model"],
-                messages=[{"role": "system", "content": optimized_prompt}],
-                temperature=0.2,
-                stream=True,
-            )
+            # 构建请求参数
+            stream_params = {
+                "model": creds["model"],
+                "messages": [{"role": "system", "content": optimized_prompt}],
+                "temperature": 0.2,
+                "stream": True,
+            }
+
+            # 如果配置了 enable_thinking=False，添加到请求参数
+            if creds.get("enable_thinking") is False:
+                stream_params["extra_body"] = {"enable_thinking": False}
+
+            stream = await client.chat.completions.create(**stream_params)
 
             # 使用思考模式处理器处理流式响应
             stream_result = await thinking_handler.process_streaming_response(
@@ -828,8 +840,7 @@ class PersonalityManager:
                 )
 
         except Exception as e:
-            error_msg = repr(e)
-            logger.error(f"更新群聊氛围失败: {error_msg}", exc_info=True)
+            logger.error(f"更新群聊氛围失败: {str(e)}", exc_info=True)
 
 
 personality_manager = PersonalityManager()

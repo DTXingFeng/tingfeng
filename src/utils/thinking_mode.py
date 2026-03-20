@@ -235,6 +235,7 @@ async def stream_with_thinking_mode(
     tools: Optional[list] = None,
     tool_choice: Any = None,
     handler: Optional[ThinkingModeHandler] = None,
+    enable_thinking: Optional[bool] = None,
     **kwargs,
 ) -> Dict[str, Any]:
     """
@@ -250,6 +251,7 @@ async def stream_with_thinking_mode(
         tools: MCP 工具列表（可选）
         tool_choice: 工具选择策略（可选）
         handler: 思考模式处理器（可选，默认创建新实例）
+        enable_thinking: 是否启用思考模式（None=不设置，False=禁用）
         **kwargs: 其他传递给 API 的参数
 
     Returns:
@@ -270,6 +272,12 @@ async def stream_with_thinking_mode(
     if tools:
         stream_params["tools"] = tools
         stream_params["tool_choice"] = tool_choice or "auto"
+
+    # 如果 enable_thinking=False，添加到 extra_body
+    if enable_thinking is False:
+        if "extra_body" not in stream_params:
+            stream_params["extra_body"] = {}
+        stream_params["extra_body"]["enable_thinking"] = False
 
     stream = await client.chat.completions.create(**stream_params)
 
