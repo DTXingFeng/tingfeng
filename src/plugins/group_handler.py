@@ -35,6 +35,10 @@ decision_tracker = DecisionStateTracker()
 last_wake_up_times = {}
 last_slang_mining_times = {}
 
+# 风格捕捉计数器：每N条消息触发一次（避免每条消息都调用AI）
+STYLE_CAPTURE_INTERVAL = 10  # 可调整，建议5-10
+style_capture_counters: dict[int, int] = {}
+
 # 消息去重：记录已处理的消息 ID，防止重复回复
 processed_messages = set()
 
@@ -564,12 +568,25 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             # 2. 性格进化与好感度更新
             await personality_manager.evolve_personality(group_id, display_name, llm_text, user_id=user_id)
 
-            # 3. 实时模仿与黑话挖掘 (采样最近 20 条历史)
+            # 3. 风格捕捉：限制触发频率（每N条消息触发一次，避免每条消息都调用AI）
+            if group_id not in style_capture_counters:
+                style_capture_counters[group_id] = 0
+
+            style_capture_counters[group_id] += 1
+
             history = await db_manager.get_chat_log(group_id, limit=20)
             history_messages = [entry["message"] for entry in history]
-            asyncio.create_task(
-                create_limited_task(personality_manager.capture_style_patterns(group_id, history_messages))
-            )
+
+            if style_capture_counters[group_id] >= STYLE_CAPTURE_INTERVAL:
+                style_capture_counters[group_id] = 0  # 重置计数器
+                asyncio.create_task(
+                    create_limited_task(personality_manager.capture_style_patterns(group_id, history_messages))
+                )
+                logger.debug(f"群 {group_id} 触发风格捕捉分析")
+            else:
+                logger.debug(
+                    f"群 {group_id} 风格捕捉冷却中 ({style_capture_counters[group_id]}/{STYLE_CAPTURE_INTERVAL})"
+                )
 
             # 黑话挖掘：限制调用频率，避免超时和API压力
             last_mining_time = last_slang_mining_times.get(group_id, 0)
