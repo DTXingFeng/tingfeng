@@ -5,10 +5,8 @@ import io
 import hashlib
 from PIL import Image
 from openai import AsyncOpenAI
-from src.config.ai_config import ai_config, ai_config_manager
-from src.utils.db_manager import db_manager
-from src.utils.context_manager import context_manager
-from src.utils.thinking_mode import thinking_handler
+from src.config.ai_config import Config as AIConfig
+from src.aimodel.LLMRequest.openai_request import OpenaiRequest
 
 
 async def process_and_encode_image(url: str, max_size: int = 1024) -> tuple[str, str, bool]:
@@ -95,21 +93,16 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
         return f"图片处理失败: {str(e)}"
 
     # 2. 如果是表情包，检查缓存
-    if is_sticker:
-        cache = await db_manager.get_sticker_cache(file_hash)
-        if cache:
-            return f"[表情描述: {cache['description']}, 标签: {cache['tag']}]"
+    # if is_sticker:
+    #     cache = await db_manager.get_sticker_cache(file_hash)
+    #     if cache:
+    #         return f"[表情描述: {cache['description']}, 标签: {cache['tag']}]"
 
     # 3. 获取 AI 配置
-    model_alias = ai_config.image_model
+    model_alias = AIConfig.get("image_model")
     if not model_alias:
         return "未配置图像识别模型"
 
-    creds = ai_config_manager.get_model_credentials(model_alias)
-    if not creds:
-        return f"找不到模型别名 '{model_alias}' 的配置"
-
-    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
     # 4. 准备提示词
     gif_hint = "（这张图片是一张动图/GIF 的多帧采样拼接图，请分析其动作序列和变化过程）" if is_gif else ""
@@ -126,60 +119,62 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
         prompt = f"请用中文深度描述这张图片的内容。{gif_hint}如果有文字，必须完整提取并概括其核心含义。请留意图中的主体、场景及直观感受，输出为一段 50 字以内的流畅平文本。"
 
     # 5. 上下文截断检查（主要针对文本提示词，虽然通常不会超限，但为了统一管理）
-    optimized_prompt, prompt_tokens = context_manager.truncate_text(
-        text=prompt, model_alias=model_alias, max_output_tokens=500
-    )
+    # from src.utils.context_manager import context_manager
+    # optimized_prompt, prompt_tokens = context_manager.truncate_text(
+    #     text=prompt, model_alias=model_alias, max_output_tokens=500
+    # )
 
     # 6. 发送请求
     try:
         # 构建请求参数
-        request_params = {
-            "model": creds["model"],
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": optimized_prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
-                        },
-                    ],
-                }
-            ],
-        }
+        request_params = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"},
+                    },
+                ],
+            }
+        ]
 
-        # 如果配置了 enable_thinking=False，添加到请求参数
-        if creds.get("enable_thinking") is False:
-            request_params["extra_body"] = {"enable_thinking": False}
+        result = OpenaiRequest(model_alias).chat(request_params)
 
-        response = await client.chat.completions.create(**request_params)
 
-        # 使用思考模式处理器处理响应
-        response_result = thinking_handler.process_non_streaming_response(response)
-        result = response_result["content"].strip()
 
-        if response_result["has_thinking"]:
-            from src.utils.logger import get_logger
+        # # 如果配置了 enable_thinking=False，添加到请求参数
+        # if creds.get("enable_thinking") is False:
+        #     request_params["extra_body"] = {"enable_thinking": False}
 
-            logger = get_logger(__name__)
-            logger.info(f"图像识别使用思考模式: 推理长度={len(response_result['thinking'])}")
+        # response = await client.chat.completions.create(**request_params)
 
-        # 6. 如果是表情包，解析并存入缓存
-        if is_sticker:
-            if "|" in result:
-                tag, desc = result.split("|", 1)
-                tag = tag.strip()
-                desc = desc.strip()
-                # 优先使用 file_id，如果没有则使用 url
-                stored_id = file_id or image_url
-                await db_manager.save_sticker_cache(file_hash, desc, tag, stored_id)
-                return f"[表情描述: {desc}, 标签: {tag}]"
-            else:
-                # 兜底处理
-                stored_id = file_id or image_url
-                await db_manager.save_sticker_cache(file_hash, result, "未知", stored_id)
-                return f"[表情描述: {result}]"
+        # # 使用思考模式处理器处理响应
+        # response_result = thinking_handler.process_non_streaming_response(response)
+        # result = response_result["content"].strip()
+
+        # if response_result["has_thinking"]:
+        #     from src.utils.logger import get_logger
+
+        #     logger = get_logger(__name__)
+        #     logger.info(f"图像识别使用思考模式: 推理长度={len(response_result['thinking'])}")
+
+        # # 6. 如果是表情包，解析并存入缓存
+        # if is_sticker:
+        #     if "|" in result:
+        #         tag, desc = result.split("|", 1)
+        #         tag = tag.strip()
+        #         desc = desc.strip()
+        #         # 优先使用 file_id，如果没有则使用 url
+        #         stored_id = file_id or image_url
+        #         await db_manager.save_sticker_cache(file_hash, desc, tag, stored_id)
+        #         return f"[表情描述: {desc}, 标签: {tag}]"
+        #     else:
+        #         # 兜底处理
+        #         stored_id = file_id or image_url
+        #         await db_manager.save_sticker_cache(file_hash, result, "未知", stored_id)
+        #         return f"[表情描述: {result}]"
 
         return result
 
