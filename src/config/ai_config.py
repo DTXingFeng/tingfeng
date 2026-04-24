@@ -1,5 +1,5 @@
-from pydantic import BaseModel
-from typing import Dict, Optional, List
+from pydantic import BaseModel, ConfigDict, Field
+from typing import Dict, Optional, List, Any
 import yaml
 from pathlib import Path
 
@@ -11,8 +11,10 @@ class PlatformConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
     platform_alias: str
-    model_name: str
+    model: str
     description: Optional[str] = ""
     max_context_tokens: int = 4096
     enable_thinking: Optional[bool] = None
@@ -67,21 +69,21 @@ class AIConfigManager:
                 models={
                     "qwen_7b": ModelConfig(
                         platform_alias="siliconflow",
-                        model_name="Qwen/Qwen2.5-7B-Instruct",
+                        model="Qwen/Qwen2.5-7B-Instruct",
                         description="Qwen 7B Instruct",
                     ),
                     "qwen_72b": ModelConfig(
                         platform_alias="siliconflow",
-                        model_name="Qwen/Qwen2.5-72B-Instruct",
+                        model="Qwen/Qwen2.5-72B-Instruct",
                         description="Qwen 72B Instruct",
                     ),
                     "qwen_vl": ModelConfig(
                         platform_alias="siliconflow",
-                        model_name="Qwen/Qwen2-VL-72B-Instruct",
+                        model="Qwen/Qwen2-VL-72B-Instruct",
                         description="Qwen2-VL 72B",
                     ),
                     "bge_m3": ModelConfig(
-                        platform_alias="siliconflow", model_name="BAAI/bge-m3", description="BGE-M3 Embedding"
+                        platform_alias="siliconflow", model="BAAI/bge-m3", description="BGE-M3 Embedding"
                     ),
                 },
                 reply_model="qwen_72b",
@@ -125,7 +127,8 @@ class AIConfigManager:
 
     def get_model_credentials(self, model_alias: str) -> Optional[Dict[str, any]]:
         """
-        根据模型别名获取完整的调用凭证 (base_url, api_key, model_name, enable_thinking)
+        根据模型别名获取完整的调用凭证 (base_url, api_key, model, enable_thinking)
+        额外字段（如 thinking）也会被包含在返回值中，供 API 调用使用
         """
         config = self.config
         if model_alias not in config.models:
@@ -137,15 +140,21 @@ class AIConfigManager:
 
         platform_cfg = config.platforms[model_cfg.platform_alias]
 
+        # 获取模型配置的所有字段
+        model_dict = model_cfg.model_dump()
+        
+        # 提取已知字段构建凭证
         credentials = {
             "base_url": platform_cfg.base_url,
             "api_key": platform_cfg.api_key,
-            "model": model_cfg.model_name
+            "model": model_dict.get("model"),
         }
         
-        # 如果模型配置了 enable_thinking 参数，添加到返回值中
-        if model_cfg.enable_thinking is not None:
-            credentials["enable_thinking"] = model_cfg.enable_thinking
+        # 保留额外字段（如 thinking），这些会被传递到 API 请求中
+        extra_fields = ["platform_alias", "description", "max_context_tokens", "enable_thinking"]
+        for key, value in model_dict.items():
+            if key not in extra_fields and value is not None:
+                credentials[key] = value
         
         return credentials
 

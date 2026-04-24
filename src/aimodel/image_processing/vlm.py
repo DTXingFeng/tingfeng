@@ -112,15 +112,15 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
     client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
 
     # 4. 准备提示词
-    gif_hint = "（这张图片是一张动图/GIF 的多帧采样拼接图，请分析其动作序列和变化过程）" if is_gif else ""
+    gif_hint = "（这是一张动图，请分析其动作序列和变化过程）" if is_gif else ""
 
     if is_sticker:
         prompt = (
-            f"你是一个表情包专家。{gif_hint}请深度解析这张表情包并完成以下任务：\n"
-            "1. **文字提取**：必须完整、准确地提取图中出现的文字内容（如果有）。\n"
-            "2. **画面描述** 用一句话描述角色的动作、神情及整体画风。如果是动图，请描述其动作过程。\n"
-            "3. **情感定性**：从[开心、大哭、暴躁、委屈、傲娇、得意、摸摸头、疑惑、震惊]中选一个最贴切的标签。\n"
-            '输出格式：\'标签|文字:"内容", 描述:"具体画面"\'。'
+            f"你是一个表情包专家。{gif_hint}请深度解析这张表情包。\n"
+            "【重要】你必须且只能输出一个纯粹的JSON对象，不要包含任何其他文字、markdown标记或解释。\n"
+            "JSON格式：{\"tag\":\"情感标签\",\"text\":\"图中文字(无则空)\",\"desc\":\"一句话描述\"}\n"
+            "情感标签只能从以下选择：开心、大哭、暴躁、委屈、傲娇、得意、摸摸头、害羞、疑惑、震惊\n"
+            "【禁止】不要输出```json```、不要输出其他说明文字、不要输出换行符在JSON外层"
         )
     else:
         prompt = f"请用中文深度描述这张图片的内容。{gif_hint}如果有文字，必须完整提取并概括其核心含义。请留意图中的主体、场景及直观感受，输出为一段 50 字以内的流畅平文本。"
@@ -167,16 +167,30 @@ async def describe_image(image_url: str, is_sticker: bool = False, file_id: str 
 
         # 6. 如果是表情包，解析并存入缓存
         if is_sticker:
-            if "|" in result:
-                tag, desc = result.split("|", 1)
-                tag = tag.strip()
-                desc = desc.strip()
+            try:
+                # 尝试解析 JSON 格式
+                import json
+                result_clean = result.strip()
+                # 移除可能的 markdown 标记
+                if result_clean.startswith("```json"):
+                    result_clean = result_clean[7:]
+                if result_clean.startswith("```"):
+                    result_clean = result_clean[3:]
+                if result_clean.endswith("```"):
+                    result_clean = result_clean[:-3]
+                result_clean = result_clean.strip()
+                
+                sticker_data = json.loads(result_clean)
+                tag = sticker_data.get("tag", "未知")
+                text = sticker_data.get("text", "")
+                desc = sticker_data.get("desc", result)
+                
                 # 优先使用 file_id，如果没有则使用 url
                 stored_id = file_id or image_url
                 await db_manager.save_sticker_cache(file_hash, desc, tag, stored_id)
                 return f"[表情描述: {desc}, 标签: {tag}]"
-            else:
-                # 兜底处理
+            except json.JSONDecodeError:
+                # JSON 解析失败，使用兜底处理
                 stored_id = file_id or image_url
                 await db_manager.save_sticker_cache(file_hash, result, "未知", stored_id)
                 return f"[表情描述: {result}]"

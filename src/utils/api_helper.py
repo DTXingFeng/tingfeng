@@ -68,9 +68,20 @@ async def call_ai_with_timeout(
             "stream": use_stream,
         }
 
-        # 如果配置了 enable_thinking=False，添加到 extra_body
-        if creds.get("enable_thinking") is False:
-            request_params["extra_body"] = {"enable_thinking": False}
+        # 自动提取配置的额外字段（如 thinking、enable_thinking）添加到 extra_body
+        base_fields = ["base_url", "api_key", "model", "max_context_tokens", "enable_thinking"]
+        extra_body = {}
+        for key, value in creds.items():
+            if key not in base_fields and value is not None:
+                extra_body[key] = value
+        
+        # 如果配置了 enable_thinking，添加到 extra_body
+        if "enable_thinking" in creds:
+            extra_body["enable_thinking"] = creds["enable_thinking"]
+        
+        # 如果有额外字段，添加到请求中
+        if extra_body:
+            request_params["extra_body"] = extra_body
 
         if use_stream:
             response = await client.chat.completions.create(**request_params)

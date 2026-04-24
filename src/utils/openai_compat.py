@@ -114,6 +114,7 @@ class OpenAICompat:
         use_response_format: bool = True,
         stream: bool = False,
         enable_thinking: Optional[bool] = None,
+        extra_fields: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -127,6 +128,7 @@ class OpenAICompat:
             use_response_format: 是否尝试使用 response_format
             stream: 是否使用流式响应
             enable_thinking: 是否启用思考模式（None=不设置，False=禁用）
+            extra_fields: 额外字段字典（如 {"thinking": {"type": "disabled"}}），会被添加到 extra_body
             **kwargs: 其他传递给 API 的参数
 
         Returns:
@@ -142,6 +144,13 @@ class OpenAICompat:
             if not self._platform_capabilities[platform_key].get("supports_response_format", True):
                 use_response_format = False
 
+        # 构建 extra_body（如果有额外字段）
+        extra_body = {}
+        if extra_fields:
+            extra_body.update(extra_fields)
+        if enable_thinking is False:
+            extra_body["enable_thinking"] = False
+
         # 首次尝试：尝试带 response_format 调用（如果请求）
         if use_response_format:
             try:
@@ -153,11 +162,9 @@ class OpenAICompat:
                     **kwargs,
                 }
 
-                # 如果 enable_thinking=False，添加到 extra_body
-                if enable_thinking is False:
-                    if "extra_body" not in request_params:
-                        request_params["extra_body"] = {}
-                    request_params["extra_body"]["enable_thinking"] = False
+                # 如果有 extra_body，添加到请求中
+                if extra_body:
+                    request_params["extra_body"] = extra_body
 
                 response = await client.chat.completions.create(**request_params)
 
@@ -177,6 +184,10 @@ class OpenAICompat:
 
         # 降级尝试：不带 response_format
         request_params = {"model": model, "messages": messages, "stream": stream, **kwargs}
+        
+        # 如果有 extra_body，添加到请求中
+        if extra_body:
+            request_params["extra_body"] = extra_body
 
         # 如果 enable_thinking=False，添加到 extra_body
         if enable_thinking is False:

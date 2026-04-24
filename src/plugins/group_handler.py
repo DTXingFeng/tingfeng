@@ -39,9 +39,6 @@ last_slang_mining_times = {}
 STYLE_CAPTURE_INTERVAL = 10  # 可调整，建议5-10
 style_capture_counters: dict[int, int] = {}
 
-# 消息去重：记录已处理的消息 ID，防止重复回复
-processed_messages = set()
-
 
 def clean_reply_format(text: str) -> str:
     """
@@ -136,6 +133,138 @@ SLANG_MINING_INTERVAL = 300  # 5分钟
 MAX_PENDING_CONTEXTS = 50
 
 
+class GroupLockManager:
+    """
+    群组锁管理器：使用 asyncio.Lock 为每个群组提供互斥访问
+    避免竞态条件和并发冲突
+    """
+
+    def __init__(self, max_hold_time: float = 120.0):
+        """
+        Args:
+            max_hold_time: 锁的最大持有时间（秒），超过此时间会自动释放（防止死锁）
+        """
+        self._locks: dict[int, asyncio.Lock] = {}
+        self._lock_creation_time: dict[int, float] = {}
+        self._lock_acquired_time: dict[int, float] = {}  # 记录锁被获取的时间
+        self._max_hold_time = max_hold_time
+
+    def get_lock(self, group_id: int) -> asyncio.Lock:
+        """获取指定群组的锁，如果不存在则创建"""
+        if group_id not in self._locks:
+            self._locks[group_id] = asyncio.Lock()
+            self._lock_creation_time[group_id] = time.time()
+        return self._locks[group_id]
+
+    async def acquire(self, group_id: int, timeout: float = 30.0) -> bool:
+        """
+        尝试获取群组锁
+
+        Args:
+            group_id: 群组ID
+            timeout: 超时时间（秒）
+
+        Returns:
+            是否成功获取锁
+        """
+        # 检查是否有死锁（锁被持有超过 max_hold_time）
+        self._check_deadlock(group_id)
+        
+        lock = self.get_lock(group_id)
+        try:
+            # 使用 wait_for 实现超时
+            await asyncio.wait_for(lock.acquire(), timeout=timeout)
+            self._lock_acquired_time[group_id] = time.time()
+            logger.debug(f"[群组锁] 群 {group_id} 获取锁成功")
+            return True
+        except asyncio.TimeoutError:
+            logger.warning(f"[群组锁] 群 {group_id} 获取锁超时 ({timeout}s)")
+            self._check_deadlock(group_id)  # 超时后再次检查是否有死锁
+            return False
+
+    def _check_deadlock(self, group_id: int):
+        """
+        检查并处理死锁：如果锁被持有超过 max_hold_time，强制释放
+        """
+        if group_id in self._lock_acquired_time:
+            hold_time = time.time() - self._lock_acquired_time[group_id]
+            if hold_time > self._max_hold_time:
+                logger.warning(
+                    f"[群组锁] 群 {group_id} 检测到死锁！锁已被持有 {hold_time:.1f}s，超过最大持有时间 {self._max_hold_time}s，强制释放"
+                )
+                self.force_release(group_id)
+
+    def release(self, group_id: int):
+        """释放群组锁"""
+        if group_id in self._locks:
+            lock = self._locks[group_id]
+            if lock.locked():
+                lock.release()
+                logger.debug(f"[群组锁] 群 {group_id} 释放锁成功")
+            # 清理获取时间记录
+            if group_id in self._lock_acquired_time:
+                hold_time = time.time() - self._lock_acquired_time[group_id]
+                del self._lock_acquired_time[group_id]
+                logger.debug(f"[群组锁] 群 {group_id} 锁持有时长: {hold_time:.1f}s")
+
+    def force_release(self, group_id: int):
+        """
+        强制释放锁（用于处理死锁）
+        """
+        if group_id in self._locks:
+            lock = self._locks[group_id]
+            if lock.locked():
+                try:
+                    lock.release()
+                    logger.warning(f"[群组锁] 群 {group_id} 强制释放锁")
+                except RuntimeError as e:
+                    logger.warning(f"[群组锁] 群 {group_id} 强制释放锁失败: {e}")
+            # 清理获取时间记录
+            if group_id in self._lock_acquired_time:
+                del self._lock_acquired_time[group_id]
+
+    def is_locked(self, group_id: int) -> bool:
+        """检查群组是否被锁定"""
+        if group_id in self._locks:
+            return self._locks[group_id].locked()
+        return False
+
+    def get_hold_time(self, group_id: int) -> float:
+        """获取锁的持有时间（秒）"""
+        if group_id in self._lock_acquired_time:
+            return time.time() - self._lock_acquired_time[group_id]
+        return 0.0
+
+    def cleanup_old_locks(self, max_age_seconds: float = 3600.0):
+        """清理过期的锁（释放内存）"""
+        current_time = time.time()
+        expired_groups = [
+            group_id for group_id, create_time in self._lock_creation_time.items()
+            if current_time - create_time > max_age_seconds and not self.is_locked(group_id)
+        ]
+        for group_id in expired_groups:
+            del self._locks[group_id]
+            del self._lock_creation_time[group_id]
+            if group_id in self._lock_acquired_time:
+                del self._lock_acquired_time[group_id]
+
+    def get_lock_status(self) -> dict:
+        """获取所有锁的状态（用于调试）"""
+        status = {}
+        for group_id, lock in self._locks.items():
+            hold_time = self.get_hold_time(group_id)
+            status[group_id] = {
+                "locked": lock.locked(),
+                "hold_time": hold_time,
+                "age": time.time() - self._lock_creation_time.get(group_id, 0)
+            }
+        return status
+
+
+# 全局锁管理器实例
+group_lock_manager = GroupLockManager()
+
+
 async def process_my_logic(
     bot: Bot,
     event: GroupMessageEvent,
@@ -164,28 +293,18 @@ async def process_my_logic(
         target_message_id: 决策引擎选择要回复的消息 ID
     """
     logger.info(f"[process_my_logic] 开始处理 消息ID={message_id}, 群组={group_id}, 目标消息ID={target_message_id}")
+    
+    # 获取群组锁，防止并发冲突
+    lock_acquired = await group_lock_manager.acquire(group_id, timeout=60.0)
+    if not lock_acquired:
+        logger.warning(f"[process_my_logic] 群 {group_id} 获取锁失败，跳过处理")
+        return
+    
     # 标记开始生成回复
     generating_reply_groups.add(group_id)
 
     try:
-        # 消息去重：检查是否已处理过该消息
-        # 优先使用 target_message_id（决策引擎选择要回复的消息），如果没有则使用 message_id（触发消息）
-        actual_message_id = target_message_id if target_message_id else message_id
-        message_key = f"{group_id}:{actual_message_id}"
-        if message_key in processed_messages:
-            logger.info(f"[消息去重] 消息 {actual_message_id} (目标消息) 已处理过，跳过重复回复")
-            return
-
-        logger.info(f"[消息去重] 消息 {actual_message_id} 未处理，加入已处理集合")
-        processed_messages.add(message_key)
-
-        # 定期清理旧的消息 ID，防止内存泄漏（保留最近 10000 条）
-        if len(processed_messages) > 10000:
-            # 保留最近的一半
-            old_list = list(processed_messages)
-            processed_messages.clear()
-            processed_messages.update(old_list[-5000:])
-
+        # 注意：已移除消息去重功能，由模型自己判断是否回复
         reply_data = await get_chat_reply(
             group_id,
             card,
@@ -197,20 +316,6 @@ async def process_my_logic(
         )
         reply_text = reply_data.get("text")
         sticker_url = reply_data.get("sticker")
-
-        current_time = time.time()
-        if reply_text and ("无法回复" in reply_text or "异常" in reply_text or "超时" in reply_text):
-            if (
-                hasattr(process_my_logic, "_last_error_message")
-                and process_my_logic._last_error_message == reply_text
-                and hasattr(process_my_logic, "_last_error_time")
-                and current_time - process_my_logic._last_error_time < 30
-            ):
-                logger.warning(f"检测到重复错误消息，跳过发送: {reply_text}")
-                return
-
-            process_my_logic._last_error_message = reply_text
-            process_my_logic._last_error_time = current_time
 
         if reply_text or sticker_url:
             if reply_text:
@@ -296,7 +401,9 @@ async def process_my_logic(
         # 回复处理完成，移除生成状态并更新冷却时间
         generating_reply_groups.discard(group_id)
         last_decision_times[group_id] = time.time()
-        logger.debug(f"群组 {group_id} 回复完成，冷却时间已更新")
+        # 释放群组锁
+        group_lock_manager.release(group_id)
+        logger.debug(f"群组 {group_id} 回复完成，锁已释放，冷却时间已更新")
 
 
 async def deferred_decision_worker(group_id: int, bot: Bot):
@@ -568,34 +675,35 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             # 2. 性格进化与好感度更新
             await personality_manager.evolve_personality(group_id, display_name, llm_text, user_id=user_id)
 
-            # 3. 风格捕捉：限制触发频率（每N条消息触发一次，避免每条消息都调用AI）
-            if group_id not in style_capture_counters:
-                style_capture_counters[group_id] = 0
-
-            style_capture_counters[group_id] += 1
-
-            history = await db_manager.get_chat_log(group_id, limit=20)
-            history_messages = [entry["message"] for entry in history]
-
-            if style_capture_counters[group_id] >= STYLE_CAPTURE_INTERVAL:
-                style_capture_counters[group_id] = 0  # 重置计数器
-                asyncio.create_task(
-                    create_limited_task(personality_manager.capture_style_patterns(group_id, history_messages))
-                )
-                logger.debug(f"群 {group_id} 触发风格捕捉分析")
-            else:
-                logger.debug(
-                    f"群 {group_id} 风格捕捉冷却中 ({style_capture_counters[group_id]}/{STYLE_CAPTURE_INTERVAL})"
-                )
-
-            # 黑话挖掘：限制调用频率，避免超时和API压力
-            last_mining_time = last_slang_mining_times.get(group_id, 0)
-            if time.time() - last_mining_time >= SLANG_MINING_INTERVAL:
-                last_slang_mining_times[group_id] = time.time()
-                asyncio.create_task(create_limited_task(personality_manager.mine_slang(group_id, history_messages)))
-                logger.debug(f"群 {group_id} 触发黑话挖掘分析")
-            else:
-                logger.debug(f"群 {group_id} 黑话挖掘冷却中，跳过本次调用")
+            # 3. 风格捕捉：暂时禁用（每N条消息触发一次，避免每条消息都调用AI）
+            # 注意：已禁用黑话分析模块以减少AI并发请求
+            # if group_id not in style_capture_counters:
+            #     style_capture_counters[group_id] = 0
+            #
+            # style_capture_counters[group_id] += 1
+            #
+            # history = await db_manager.get_chat_log(group_id, limit=20)
+            # history_messages = [entry["message"] for entry in history]
+            #
+            # if style_capture_counters[group_id] >= STYLE_CAPTURE_INTERVAL:
+            #     style_capture_counters[group_id] = 0  # 重置计数器
+            #     asyncio.create_task(
+            #         create_limited_task(personality_manager.capture_style_patterns(group_id, history_messages))
+            #     )
+            #     logger.debug(f"群 {group_id} 触发风格捕捉分析")
+            # else:
+            #     logger.debug(
+            #         f"群 {group_id} 风格捕捉冷却中 ({style_capture_counters[group_id]}/{STYLE_CAPTURE_INTERVAL})"
+            #     )
+            #
+            # # 黑话挖掘：限制调用频率，避免超时和API压力
+            # last_mining_time = last_slang_mining_times.get(group_id, 0)
+            # if time.time() - last_mining_time >= SLANG_MINING_INTERVAL:
+            #     last_slang_mining_times[group_id] = time.time()
+            #     asyncio.create_task(create_limited_task(personality_manager.mine_slang(group_id, history_messages)))
+            #     logger.debug(f"群 {group_id} 触发黑话挖掘分析")
+            # else:
+            #     logger.debug(f"群 {group_id} 黑话挖掘冷却中，跳过本次调用")
 
             # 4. 尝试进行记忆固化 (每 50 条消息处理一次)
             await consolidate_memories(group_id)
@@ -665,32 +773,38 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         # 取消已存在的延迟决策任务，因为现在就要立刻处理
         if group_id in active_deferred_tasks:
             active_deferred_tasks[group_id].cancel()
+            logger.info(f"[艾特处理] 群{group_id} 取消了延迟决策任务")
 
         pending_decisions[group_id] = False
 
-        # 如果当前没有正在进行的决策，则立即执行
-        if group_id not in deciding_groups:
-            deciding_groups.add(group_id)
-            try:
-                # 执行决策评估心情（注意：不在此时更新冷却时间，而是在回复完成后更新）
-                decision = await should_i_reply(
-                    group_id, display_name, llm_text, is_at_me=True, user_id=user_id, is_sticker=is_sticker_msg
-                )
+        # 艾特消息：使用较短超时快速获取锁（10秒），避免长时间等待
+        lock_acquired = await group_lock_manager.acquire(group_id, timeout=10.0)
+        if not lock_acquired:
+            logger.warning(f"[艾特处理] 群 {group_id} 获取锁失败，跳过本次处理")
+            return
 
-                # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
-                mood_impact = decision.get("mood_impact", 0)
-                if mood_impact != 0:
-                    await db_manager.update_mood(group_id, mood_impact)
+        deciding_groups.add(group_id)
+        try:
+            # 执行决策评估心情（注意：不在此时更新冷却时间，而是在回复完成后更新）
+            decision = await should_i_reply(
+                group_id, display_name, llm_text, is_at_me=True, user_id=user_id, is_sticker=is_sticker_msg
+            )
 
-                do_reply = True
-                target_user = decision.get("reply_to_user", display_name)
-                target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容
-                target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
-                # 记录被艾特时的回复行为
-                interest_score = decision.get("interest_score", 0.8)
-                await db_manager.record_bot_reply(group_id, display_name, is_at_bot=True, interest_score=interest_score)
-            finally:
-                deciding_groups.remove(group_id)
+            # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
+            mood_impact = decision.get("mood_impact", 0)
+            if mood_impact != 0:
+                await db_manager.update_mood(group_id, mood_impact)
+
+            do_reply = True
+            target_user = decision.get("reply_to_user", display_name)
+            target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容
+            target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
+            # 记录被艾特时的回复行为
+            interest_score = decision.get("interest_score", 0.8)
+            await db_manager.record_bot_reply(group_id, display_name, is_at_bot=True, interest_score=interest_score)
+        finally:
+            deciding_groups.discard(group_id)
+            group_lock_manager.release(group_id)
     else:
         # 2. 没被叫到，尝试进行 AI 智能决策
         # 首先检查当前是否在"作息表"允许的水群时间内
@@ -702,55 +816,60 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
         if current_time - last_time >= bot_config.decision_interval:
             # 过了冷却期，直接触发决策判断
-            # 确保当前没有正在进行的决策，也没有正在生成的回复
-            if group_id not in deciding_groups and group_id not in generating_reply_groups:
-                deciding_groups.add(group_id)
-                try:
-                    pending_decisions[group_id] = False
+            # 非艾特消息：使用较长超时等待锁（30秒）
+            lock_acquired = await group_lock_manager.acquire(group_id, timeout=30.0)
+            if not lock_acquired:
+                logger.warning(f"[智能决策] 群 {group_id} 获取锁失败，跳过本次处理")
+                return
 
-                    # 执行决策（注意：不在此时更新冷却时间，而是在回复完成后更新）
-                    decision = await should_i_reply(
-                        group_id, display_name, llm_text, is_at_me=False, user_id=user_id, is_sticker=is_sticker_msg
+            deciding_groups.add(group_id)
+            try:
+                pending_decisions[group_id] = False
+
+                # 执行决策（注意：不在此时更新冷却时间，而是在回复完成后更新）
+                decision = await should_i_reply(
+                    group_id, display_name, llm_text, is_at_me=False, user_id=user_id, is_sticker=is_sticker_msg
+                )
+
+                # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
+                mood_impact = decision.get("mood_impact", 0)
+                if mood_impact != 0:
+                    await db_manager.update_mood(group_id, mood_impact)
+
+                # 只有 should_reply 为 True 且兴趣度足够高时才回复 (避免随意插话)
+                interest_score = decision.get("interest_score", 0)
+                logger.info(
+                    f"[决策判断] should_reply={decision.get('should_reply', False)}, "
+                    f"interest_score={interest_score}, threshold={bot_config.interest_threshold}, "
+                    f"is_at_me={is_at_me}"
+                )
+                if decision.get("should_reply", False) and interest_score >= bot_config.interest_threshold:
+                    do_reply = True
+                    logger.info(f"[触发回复] 兴趣度 {interest_score} >= 阈值 {bot_config.interest_threshold}")
+                    # 记录回复行为
+                    await db_manager.record_bot_reply(
+                        group_id, display_name, is_at_bot=False, interest_score=interest_score
                     )
-
-                    # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
-                    mood_impact = decision.get("mood_impact", 0)
-                    if mood_impact != 0:
-                        await db_manager.update_mood(group_id, mood_impact)
-
-                    # 只有 should_reply 为 True 且兴趣度足够高时才回复 (避免随意插话)
-                    interest_score = decision.get("interest_score", 0)
-                    logger.info(
-                        f"[决策判断] should_reply={decision.get('should_reply', False)}, "
-                        f"interest_score={interest_score}, threshold={bot_config.interest_threshold}, "
-                        f"is_at_me={is_at_me}"
+                # 即使 AI 决定不回复，也有一定概率随机回复
+                elif random.random() < bot_config.reply_rate:
+                    do_reply = True
+                    logger.info(f"[随机回复] 触发随机回复")
+                    await db_manager.record_bot_reply(
+                        group_id, display_name, is_at_bot=False, interest_score=bot_config.interest_threshold
                     )
-                    if decision.get("should_reply", False) and interest_score >= bot_config.interest_threshold:
-                        do_reply = True
-                        logger.info(f"[触发回复] 兴趣度 {interest_score} >= 阈值 {bot_config.interest_threshold}")
-                        # 记录回复行为
-                        await db_manager.record_bot_reply(
-                            group_id, display_name, is_at_bot=False, interest_score=interest_score
-                        )
-                    # 即使 AI 决定不回复，也有一定概率随机回复
-                    elif random.random() < bot_config.reply_rate:
-                        do_reply = True
-                        logger.info(f"[随机回复] 触发随机回复")
-                        await db_manager.record_bot_reply(
-                            group_id, display_name, is_at_bot=False, interest_score=bot_config.interest_threshold
-                        )
-                    else:
-                        logger.info(f"[不回复] 未满足回复条件，更新冷却时间")
-                        do_reply = False
-                        # 即使不回复，也要更新冷却时间，避免频繁调用决策引擎
-                        last_decision_times[group_id] = time.time()
+                else:
+                    logger.info(f"[不回复] 未满足回复条件，更新冷却时间")
+                    do_reply = False
+                    # 即使不回复，也要更新冷却时间，避免频繁调用决策引擎
+                    last_decision_times[group_id] = time.time()
 
-                    selected_user = decision.get("selected_user", display_name)  # 选定消息的发送者
-                    target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
-                    target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容(纯文本)
-                    target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
-                finally:
-                    deciding_groups.remove(group_id)
+                selected_user = decision.get("selected_user", display_name)  # 选定消息的发送者
+                target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
+                target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容(纯文本)
+                target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
+            finally:
+                deciding_groups.discard(group_id)
+                group_lock_manager.release(group_id)
         else:
             # 还在冷却期内，只要有消息就标记为"待处理"，确保冷却结束后一定会判断
             pending_decisions[group_id] = True
