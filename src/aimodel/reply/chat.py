@@ -585,7 +585,12 @@ async def get_chat_reply(
 
             # 按正确顺序添加消息：
             # 1. 先添加 assistant 消息（带 tool_calls）
-            tool_messages.append({"role": "assistant", "content": "", "tool_calls": assistant_tool_calls})
+            # 思考模式下，必须将 reasoning_content 传回 API，否则会报 400 错误
+            assistant_msg = {"role": "assistant", "content": "", "tool_calls": assistant_tool_calls}
+            if has_thinking and reasoning_content:
+                assistant_msg["reasoning_content"] = reasoning_content
+                logger.debug(f"思考模式: 将 reasoning_content (长度={len(reasoning_content)}) 传回 API")
+            tool_messages.append(assistant_msg)
 
             # 2. 再添加所有 tool 消息（带 tool_call_id）
             for tool_msg in tool_result_messages:
