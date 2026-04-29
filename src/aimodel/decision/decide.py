@@ -10,6 +10,7 @@ from src.utils.error_handler import handle_errors, APIError
 from src.utils.openai_compat import openai_compat
 from src.utils.thinking_mode import thinking_handler
 from src.mcp.registry import tool_registry
+from src.aimodel.decision.prefilter import reply_prefilter
 from typing import Optional
 import json
 import asyncio
@@ -113,16 +114,11 @@ async def should_i_reply(
     if not creds:
         return {"should_reply": False, "mood_impact": 0}
 
-    # 获取当前心情（作为参考）
+    # 获取当前心情
     current_mood_val = await db_manager.get_mood(group_id)
 
-    # 获取人格状态
-    personality_state = await db_manager.get_personality_state(group_id)
-    traits = personality_state.get("traits", {})
-    recent_thoughts = personality_state.get("recent_thoughts", "暂无")
-
-    # 2. 准备上下文 (获取最近 15 条消息，提供更多选择空间)
-    history = await db_manager.get_chat_log(group_id, limit=15)
+    # 2. 准备上下文 (获取最近 10 条消息)
+    history = await db_manager.get_chat_log(group_id, limit=10)
 
     # 提取消息文本和对应的 message_id，并清理引用格式
     history_messages = []
@@ -132,6 +128,21 @@ async def should_i_reply(
         clean_msg = clean_reply_format(item["message"])
         history_messages.append(clean_msg)
         history_message_ids.append(item["message_id"])
+
+    # 2.5. 规则预过滤器：在调用 AI 前用快速规则判断是否值得决策
+    if not is_at_me:
+        prefilter_result = reply_prefilter.should_skip_ai_decision(
+            user_name=user_name,
+            current_msg=current_msg,
+            is_at_me=False,
+            is_sticker=is_sticker,
+            history_messages=history_messages,
+        )
+        if prefilter_result.should_skip_ai:
+            logger.info(
+                f"预过滤器跳过 AI 决策: {prefilter_result.reason} " f"[用户:{user_name}] [消息:{current_msg[:30]}...]"
+            )
+            return {"should_reply": prefilter_result.should_reply, "mood_impact": 0}
 
     # 3. 检索相关记忆与知识
     user_profile = await db_manager.get_user_impression(group_id, user_id) if user_id else None
@@ -149,7 +160,7 @@ async def should_i_reply(
     try:
         query_vectors = await get_embeddings([current_msg])
         if query_vectors and len(query_vectors) > 0:
-            long_term_memories = await vector_db.query_memory(group_id, query_vectors[0], n_results=3)
+            long_term_memories = await vector_db.query_memory(group_id, query_vectors[0], n_results=2)
     except Exception as e:
         logger.warning(f"获取长期记忆失败: {e}")
 
@@ -248,7 +259,7 @@ async def should_i_reply(
             marked_msg = f"★ {msg}"
         history_with_index.append(f"[{idx}] {marked_msg}")
     history_str = "\n".join(history_with_index)
-    
+
     # 计算最大索引
     max_idx = len(history_messages) - 1 if history_messages else 0
 
@@ -270,91 +281,24 @@ async def should_i_reply(
     bot_recently_spoke = context_analysis["has_bot_msg_recently"]
 
     prompt = (
-        f"你是'{bot_config.bot_name}'的决策大脑。当前状态：心情{current_mood_val}/100，性格{json.dumps(traits, ensure_ascii=False)}，最近想法：{recent_thoughts}\n"
-        f"对话类型：{conversation_type}，最近发言：{'是' if bot_recently_spoke else '否'}\n"
-        f"### 对话上下文分析：\n"
-        f"- 最近是否有bot发言：{'是' if context_analysis['has_bot_msg_recently'] else '否'}\n"
-        + (
-            f"- Bot发言后消息数：{context_analysis['messages_after_bot']}\n"
-            f"- 上下文提示：{context_analysis['context_hint']}\n"
-            if context_analysis["has_bot_msg_recently"]
-            else ""
-        )
-        + f"- 系统建议场景：{context_analysis['suggested_scene']} (仅供参考，请自行判断)\n"
-        f"{'⚠️ 提示：根据上下文分析，当前消息很可能是在延续你之前的对话，请优先考虑场景A！' if context_analysis['suggested_scene'] == 'A' else ''}\n\n"
-        f"### 记忆：\n{memory_str}\n{slang_context}\n\n"
-        "### 任务：\n"
-        "1. 判断对话场景（A/B/C），选择最值得回复的消息\n"
-        "2. 决定是否回复，评估心情影响\n\n"
-        "### 场景判断（核心）：\n"
-        "**A. 正在和你对话**（0.5-0.95分）：满足以下任一条件即判定为场景A：\n"
-        "   - 最近1-2条消息在直接回应你的发言（追问、反驳、补充、确认等）\n"
-        "   - 话题自然延续，用户在回应你的话或继续讨论你提到的话题\n"
-        "   - **关键**：如果bot发言后只有1-2条消息，很可能是对话延续；如果已有5+条消息，可能已转向\n"
-        "   - 优先回复，这是参与对话的最佳时机\n"
-        "**B. 提到你但未对话**（0.1-0.5分）：被作为话题讨论，但你未参与，谨慎插话。\n"
-        "**C. 完全无关**（0.0-0.7分）：满足以下条件才判定为场景C：\n"
-        "   - 最近多条消息中没有你的发言，或你的发言是很久之前的插话\n"
-        "   - 话题自始至终由他人发起和延续，不涉及你\n"
-        "   - 必须有强关联记忆才考虑参与：\n"
-        "     * 记忆中明确提到过该话题/关键词\n"
-        "     * 记忆中与当前消息内容高度相关（相同事件、相似经历）\n"
-        "     * 有明确的用户印象或往事与此话题直接相关\n"
-        "   - **评分标准**\n"
-        "     * 有强关联记忆且能提供有价值信息：0.5-0.7分\n"
-        "     * 有弱关联记忆（仅略微相关）：0.1-0.3分\n"
-        "     * 无关联记忆：0分（绝不参与）\n"
-        "   - 只能说'哈哈''厉害'这种废话 → 即使有记忆也不参与\n"
-        "   - 默认沉默，有强关联记忆且有料才说\n"
-        "   - **特别注意**：如果历史中看到★ [你的发言]标记，要判断对话是否还在延续，而不是机械地归类为C\n\n"
-        "### 核心原则：\n"
-        "- **沉默是金**：默认不回复，你是真人不是助手，不需要对每件事都评论\n"
-        "- **指代消歧**：历史中的'你'需要判断是否指你。用户A↔用户B的快速来回，他们的'你'互相指代，不是在叫你\n"
-        "  - 只有以下情况'你'才指你：明确艾特你/提到你的名字/上一条是你发的/上下文明确与你相关\n"
-        "  - 无法确定 → 默认不指你\n"
-        "- **对话流向**：如果是用户A↔用户B的双人对话，不涉及你 → 严禁插话\n"
-        "- **绝对禁止复读攻击性言论**：不要选择包含攻击、嘲讽、贬低他人的消息进行回复，即使对方@你\n"
-        "  - 例如：对方说'你真蠢'，不要回复'你真蠢'\n"
-        "  - 正确做法：用不同的方式回应，或者选择忽略\n"
-        "- **记忆驱动**：\n"
-        "  - 场景A/B：话题与记忆重合可提升兴趣，但不是必需\n"
-        "  - 场景C：必须有强关联记忆才能参与，无记忆绝不插话\n"
-        "- **心情影响**：\n"
-        "  - 夸奖/关心/愉快话题：+1~+3\n"
-        "  - 严重辱骂/恶意攻击：-5~-12\n"
-        "  - 轻微吐槽/玩笑/冷落：0（别太敏感）\n"
-        "  - 无关话题：0\n"
-        "- **避免重复回复（重要）**：\n"
-        "  - 如果你之前已经回复过某条消息/某个话题，不要再次回复同样的内容\n"
-        "  - 只有以下情况才可再次参与：\n"
-        "    * 对方追问：对方在原话题基础上继续追问细节/深入\n"
-        "    * 对方重新发起：对方隔了几条消息后重新问了一遍同样的问题\n"
-        "    * 新进展：话题有了新的发展或变化\n"
-        "  - 如果你看到★标记的你的发言，不要选择回复那条消息或相同话题的后续\n"
-        "- **优先回复新消息**：\n"
-        "  - 在选择回复目标时，优先选择时间更接近当前的消息（索引更大的消息）\n"
-        "  - 除非老消息有明确追问/延续，否则默认选择最新的消息\n"
-        "  - 避免回复很久之前的老消息，除非它们被重新提起或有强关联记忆\n\n"
-        f"### 上下文信息：\n"
-        f"最近记录（带索引）：\n{history_str}\n"
-        f"### 格式说明：\n"
-        f'- 引用格式 [回复@用户名: "内容"] 表示「当前发送者在回复某用户」，引用内容是「被引用者」说的\n'
-        f"- 历史消息中的'你''它'等代词需要判断是否指你（见前述指代消歧规则）\n\n"
-        f"当前消息：{user_name}: {current_msg}\n"
-        f"是否艾特你：{is_at_me}\n"
-        f"是否表情包：{is_sticker}\n\n"
-        "### 输出要求：\n"
-        "请直接输出 JSON 格式：\n"
-        "{\n"
-        f'  "should_reply": boolean,\n'
-        f'  "target_message_index": number (选择回复的历史消息索引，0-{max_idx}),\n'
-        f'  "reply_to_user": "指定回复对象的用户名（必须从选定消息或上下文中选择）",\n'
-        f'  "mood_impact": number (-10 到 10 之间的整数),\n'
-        f'  "reason": "简短的理由（说明为什么选择这条消息）",\n'
-        f'  "is_replying_to_bot": boolean,\n'
-        f'  "interest_score": number (0-1),\n'
-        f'  "conversation_scene": "A/B/C (场景识别：A=正在和bot对话, B=提到bot但未对话, C=完全没和bot聊天)"\n'
-        f"}}"
+        f"你是'{bot_config.bot_name}'，心情{current_mood_val}/100。决定是否回复。\n"
+        f"对话类型：{conversation_type}，"
+        f"{'刚发言过，下一条很可能是在接你的话' if bot_recently_spoke else '沉默中'}。\n"
+        f"### 背景：\n{memory_str}\n{slang_context}\n"
+        f"### 决策规则：\n"
+        f"场景A（对话延续）：最近1-2条在回应你的发言/延续你开启的话题 → interest 0.5-1.0，强烈建议回。\n"
+        f"场景B（被提到）：被@或讨论到你但未直接对话 → interest 0.1-0.5，谨慎参与。\n"
+        f"场景C（无关）：与你完全无关 → 默认0分。仅当强关联记忆+有价值内容才给0.3-0.7分。无记忆→0分。\n"
+        f"默认沉默，你是真人不是客服。只说有料的话。\n"
+        f"历史中★是你的发言：对方在追问/重新发起/有新进展→可以回；纯粹刷屏/重复→不回。\n"
+        f"他人A↔B对话中的'你'不指你。无法确定→默认不指你。\n"
+        f"心情：夸奖+1~+3，辱骂-5~-12，无关/玩笑=0。\n"
+        f"### 历史（★=你的发言）：\n{history_str}\n"
+        f"引用格式 [回复@:内容] 表示发送者在回复被引用者。\n"
+        f"当前：{user_name}: {current_msg} [{'@你' if is_at_me else '普通消息'}] [{'表情包' if is_sticker else ''}]\n"
+        f'输出JSON：{{"should_reply":bool,"target_message_index":0-{max_idx},'
+        f'"reply_to_user":"用户名","mood_impact":-10~10,"reason":"理由",'
+        f'"is_replying_to_bot":bool,"interest_score":0-1,"conversation_scene":"A/B/C"}}'
     )
 
     client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=30.0)
@@ -582,17 +526,186 @@ async def should_i_reply(
             "interest_score": 0.0,
             "is_replying_to_bot": False,
         }
-    except Exception as e:
-        error_msg = str(e) if str(e) else type(e).__name__
-        logger.opt(exception=True).error("决策过程出错: {}: {}", type(e).__name__, error_msg)
+
+
+async def should_i_scan_join(
+    group_id: int,
+    queued_contexts: list,
+    history_messages: list = None,
+) -> dict:
+    """
+    扫描模式：bot 主动回看群聊，判断是否有值得参与的话题
+
+    与 should_i_reply 的区别：
+    - 批量处理多条消息（而非逐条判断）
+    - 放宽预过滤限制（扫描模式下不检查"bot是否相关"）
+    - 更紧凑的 prompt（减少 token 消耗）
+    - 只回复有强记忆关联 + 有料可说的话题
+    - 极度负面心情时（<20）拒绝参与
+
+    Args:
+        group_id: 群组 ID
+        queued_contexts: 队列中的消息上下文列表
+        history_messages: 已清理的历史消息列表（外部传入，避免重复DB查询）
+
+    Returns:
+        决策结果字典，包含 should_reply, target_context 等
+    """
+    model_alias = ai_config.decision_model
+    if not model_alias:
+        return {"should_reply": False, "reason": "模型未配置"}
+
+    creds = ai_config_manager.get_model_credentials(model_alias)
+    if not creds:
+        return {"should_reply": False, "reason": "凭证无效"}
+
+    # 获取完整历史（如果外部未传入则自行查询）
+    if history_messages is None:
+        history = await db_manager.get_chat_log(group_id, limit=20)
+        history_messages = []
+        for item in history:
+            clean_msg = clean_reply_format(item["message"])
+            history_messages.append(clean_msg)
+
+    current_mood_val = await db_manager.get_mood(group_id)
+
+    # 极度负面心情 → 不参与任何对话
+    SCAN_MOOD_MINIMUM = 20
+    if current_mood_val < SCAN_MOOD_MINIMUM:
         return {
-            "should_reply": is_at_me,
+            "should_reply": False,
+            "reason": f"心情过低({current_mood_val}/100)，不想说话",
             "mood_impact": 0,
-            "target_message_index": 0,
-            "target_message_id": None,
-            "target_message_content": current_msg,
-            "selected_user": user_name,
-            "reply_to_user": user_name,
-            "interest_score": 0.0,
-            "is_replying_to_bot": False,
         }
+
+    # 用预过滤器在扫描模式下过滤队列中的消息
+    # 只保留有实质性内容的消息
+    viable_messages = []
+    for ctx in queued_contexts:
+        prefilter_result = reply_prefilter.should_skip_ai_decision(
+            user_name=ctx.get("display_name", "未知"),
+            current_msg=ctx.get("llm_text", ""),
+            is_at_me=False,
+            is_sticker=len(ctx.get("stickers", [])) > 0,
+            history_messages=history_messages,
+            scan_mode=True,
+        )
+        if not prefilter_result.should_skip_ai:
+            viable_messages.append(ctx)
+
+    if not viable_messages:
+        logger.info(f"扫描模式: 队列中 {len(queued_contexts)} 条消息均被质量过滤")
+        return {"should_reply": False, "reason": "没有有实质内容的消息"}
+
+    logger.info(f"扫描模式: 队列 {len(queued_contexts)} 条 → 预过滤后 {len(viable_messages)} 条有效消息")
+
+    # 构建紧凑的扫描 prompt（取最近 8 条历史 + 全部有效待处理消息）
+    recent_history = history_messages[-8:] if len(history_messages) > 8 else history_messages
+    history_str = "\n".join(f"[{i}] {msg}" for i, msg in enumerate(recent_history))
+
+    # 注入记忆（用最后一条有效消息做向量搜索，匹配回复目标）
+    memory_text = "暂无相关记忆"
+    try:
+        last_msg = viable_messages[-1].get("llm_text", "")
+        if last_msg:
+            query_vectors = await get_embeddings([last_msg])
+            if query_vectors and len(query_vectors) > 0:
+                memories = await vector_db.query_memory(group_id, query_vectors[0], n_results=2)
+                if memories:
+                    memory_text = "\n".join(f"- {m}" for m in memories)
+    except Exception:
+        pass
+
+    # 获取高频黑话
+    learned_slangs = await db_manager.get_slang_candidates(group_id, min_freq=30, stage=2)
+    slang_text = ""
+    if learned_slangs:
+        slang_items = [f"- {s['phrase']}: {s['definition']}" for s in learned_slangs]
+        slang_text = "\n".join(slang_items)
+
+    # 构建有效待处理消息摘要（注入到 prompt 中）
+    viable_summary = "\n".join(
+        f"- {ctx.get('display_name', '未知')}: {ctx.get('llm_text', '')[:80]}" for ctx in viable_messages
+    )
+
+    prompt = (
+        f"你是'{bot_config.bot_name}'，一个群聊里的真人，刚离开一会儿回来看看。\n"
+        f"心情{current_mood_val}/100。\n\n"
+        f"### 记忆：\n{memory_text}\n"
+    )
+    if slang_text:
+        prompt += f"\n### 群内黑话：\n{slang_text}\n"
+    prompt += (
+        f"\n### 历史：\n{history_str}\n\n"
+        f"### 你没看到的新消息：\n{viable_summary}\n\n"
+        f"### 决定是否加入对话。规则：\n"
+        f"1. 你是真人不是客服，不需要每条都回\n"
+        f"2. 必须有记忆关联或你有料可说才开口，只能说'哈哈'就别回\n"
+        f"3. 话题已冷（最后一条过了5+条消息）→ 不追\n"
+        f"4. 心情很低(<40)→更谨慎\n"
+        f"5. 回看群聊就像打开群看了一眼，自然一点\n"
+        f'输出JSON：{{"should_join":true/false,"reason":"简述","mood_impact":-2~+5}}'
+    )
+
+    client = AsyncOpenAI(api_key=creds["api_key"], base_url=creds["base_url"], timeout=20.0)
+
+    try:
+        optimized_prompt, prompt_tokens = context_manager.truncate_text(
+            text=prompt, model_alias=model_alias, max_output_tokens=100, reserve_ratio=0.1
+        )
+
+        if prompt_tokens > 0:
+            print(
+                f"[上下文管理] 扫描模式, 使用tokens: {prompt_tokens}/{context_manager.get_model_max_tokens(model_alias)}"
+            )
+
+        stream = await openai_compat.create_with_auto_fallback(
+            client=client,
+            model=creds["model"],
+            messages=[{"role": "user", "content": optimized_prompt}],
+            base_url=creds["base_url"],
+            use_response_format=True,
+            stream=True,
+        )
+
+        stream_result = await thinking_handler.process_streaming_response(
+            stream=stream,
+            model_name=creds["model"],
+            collect_thinking=True,
+        )
+
+        content = stream_result["content"].strip()
+        if "```json" in content:
+            content = content.split("```json")[1].split("```")[0].strip()
+        elif "```" in content:
+            content = content.split("```")[1].split("```")[0].strip()
+
+        decision = json.loads(content)
+        should_join = decision.get("should_join", False)
+        mood_impact = decision.get("mood_impact", 0)
+        reason = decision.get("reason", "")
+
+        print(f"扫描决策: [加入:{should_join}] [心情:{mood_impact:+}] [理由:{reason}]")
+
+        if not should_join:
+            return {"should_reply": False, "reason": reason, "mood_impact": mood_impact}
+
+        # 如果决定加入，选最新的有效消息回复（扫描模式只接最新话题）
+        latest_ctx = viable_messages[-1]
+        return {
+            "should_reply": True,
+            "reason": reason,
+            "mood_impact": mood_impact,
+            "target_context": latest_ctx,
+            "reply_to_user": latest_ctx.get("display_name", "未知"),
+            "target_message_content": latest_ctx.get("llm_text", ""),
+            "target_message_id": latest_ctx.get("message_id"),
+            "interest_score": bot_config.interest_threshold,  # 使用配置阈值，确保一致
+        }
+
+    except json.JSONDecodeError as e:
+        logger.error(f"扫描决策JSON解析失败: {e}")
+        return {"should_reply": False, "reason": "JSON解析失败"}
+    except Exception as e:
+        logger.opt(exception=True).error(f"扫描决策出错: {type(e).__name__}: {e}")
+        return {"should_reply": False, "reason": f"异常: {type(e).__name__}"}

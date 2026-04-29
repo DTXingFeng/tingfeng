@@ -9,7 +9,7 @@ from src.aimodel.memory.embeddings import get_embeddings
 from src.aimodel.memory.vector_db import vector_db
 from src.aimodel.memory.consolidation import consolidate_memories
 from src.aimodel.reply.personality import personality_manager
-from src.aimodel.decision.decide import should_i_reply
+from src.aimodel.decision.decide import should_i_reply, should_i_scan_join
 from src.utils.logger import get_logger
 from src.utils.performance_monitor import ConcurrencyLimiter, RateLimiter
 from src.utils.timed_cache import GroupContextManager, DecisionStateTracker
@@ -62,55 +62,46 @@ def clean_reply_format(text: str) -> str:
     return cleaned.strip()
 
 
-async def create_limited_task(coro):
-    """
-    创建受并发和速率限制的任务
-
-    Args:
-        coro: 协程对象
-    """
-    await task_rate_limiter.wait_for_slot()
-    async with task_concurrency_limiter:
-        return await coro
-
-
-# 记录每个群组最后一次被"强行唤醒"的时间（如被艾特或被提及）
-last_wake_up_times = {}
+def extract_user_name(event: GroupMessageEvent) -> str:
+    """从事件中提取最佳用户名"""
+    if event.sender.card and event.sender.card.strip():
+        return event.sender.card.strip()
+    if event.sender.nickname and event.sender.nickname.strip():
+        return event.sender.nickname.strip()
+    return str(event.user_id)
 
 
 async def is_within_chat_time(group_id: int) -> bool:
-    """检查当前时间是否在作息表的'水群'时间段内，或处于强行唤醒后的关注期内"""
-    # 如果作息表系统关闭，全天候可水群
+    """检查当前是否在作息表允许的水群时间内"""
     if not bot_config.enable_schedule:
         return True
 
-    now = datetime.datetime.now()
+    try:
+        schedule = await db_manager.get_group_schedule(group_id)
+        if not schedule:
+            return True  # 无作息表 → 默认允许
+    except Exception as e:
+        logger.warning(f"获取作息表失败: {e}")
+        return True  # 出错时默认允许
 
-    # 1. 检查是否处于“强行唤醒”后的关注期（默认 5 分钟）
-    last_wake = last_wake_up_times.get(group_id, 0)
-    if time.time() - last_wake < 300:  # 300秒 = 5分钟
-        return True
-
-    # 2. 检查作息表
-    today_str = now.strftime("%Y-%m-%d")
-    current_time_str = now.strftime("%H:%M")
-
-    schedule = await db_manager.get_bot_schedule(group_id, today_str)
-
-    if not schedule:
-        return True
-
-    for item in schedule:
-        if not isinstance(item, dict):
-            continue
-        start = item.get("start")
-        end = item.get("end")
-        can_chat = item.get("can_chat", False)
-
+    current_time_str = datetime.datetime.now().strftime("%H:%M")
+    for period in schedule:
+        can_chat = period.get("can_chat", False)
+        start = period.get("start")
+        end = period.get("end")
         if start and end and can_chat and start <= current_time_str <= end:
             return True
 
     return False
+
+
+async def create_limited_task(coro):
+    """
+    创建受并发和速率限制的任务
+    """
+    await task_rate_limiter.wait_for_slot()
+    async with task_concurrency_limiter:
+        return await coro
 
 
 # 记录每个群最后一次进行 AI 决策的时间
@@ -125,12 +116,17 @@ active_deferred_tasks = {}
 deciding_groups = set()
 # 记录每个群组是否正在生成回复（防止在生成期间进行新决策）
 generating_reply_groups = set()
-# 记录每个群最后一次进行黑话挖掘的时间（避免频繁调用）
-last_slang_mining_times = {}
-# 黑话挖掘最小间隔时间（秒）
-SLANG_MINING_INTERVAL = 300  # 5分钟
 # 每个群组队列的最大长度（防止内存溢出）
 MAX_PENDING_CONTEXTS = 50
+# 扫描模式：记录每个群最后一次扫描的时间（模块级，避免协程重启丢失）
+last_scan_times: dict[int, float] = {}
+# 扫描最小间隔（秒，两次扫描之间至少隔这么久）
+SCAN_MIN_INTERVAL = 600
+# 触发扫描的最小队列积压条数
+SCAN_MIN_QUEUE_SIZE = 5
+# 扫描模式：每小时最多触发几次扫描（防止高频重扫）
+hourly_scan_counts: dict[int, tuple[float, int]] = {}  # group_id → (小时起始时间戳, 次数)
+SCAN_MAX_PER_HOUR = 2
 
 
 class GroupLockManager:
@@ -139,129 +135,28 @@ class GroupLockManager:
     避免竞态条件和并发冲突
     """
 
-    def __init__(self, max_hold_time: float = 120.0):
-        """
-        Args:
-            max_hold_time: 锁的最大持有时间（秒），超过此时间会自动释放（防止死锁）
-        """
+    def __init__(self):
         self._locks: dict[int, asyncio.Lock] = {}
-        self._lock_creation_time: dict[int, float] = {}
-        self._lock_acquired_time: dict[int, float] = {}  # 记录锁被获取的时间
-        self._max_hold_time = max_hold_time
 
-    def get_lock(self, group_id: int) -> asyncio.Lock:
-        """获取指定群组的锁，如果不存在则创建"""
+    def _get_lock(self, group_id: int) -> asyncio.Lock:
         if group_id not in self._locks:
             self._locks[group_id] = asyncio.Lock()
-            self._lock_creation_time[group_id] = time.time()
         return self._locks[group_id]
 
     async def acquire(self, group_id: int, timeout: float = 30.0) -> bool:
-        """
-        尝试获取群组锁
-
-        Args:
-            group_id: 群组ID
-            timeout: 超时时间（秒）
-
-        Returns:
-            是否成功获取锁
-        """
-        # 检查是否有死锁（锁被持有超过 max_hold_time）
-        self._check_deadlock(group_id)
-        
-        lock = self.get_lock(group_id)
+        lock = self._get_lock(group_id)
         try:
-            # 使用 wait_for 实现超时
             await asyncio.wait_for(lock.acquire(), timeout=timeout)
-            self._lock_acquired_time[group_id] = time.time()
-            logger.debug(f"[群组锁] 群 {group_id} 获取锁成功")
             return True
         except asyncio.TimeoutError:
-            logger.warning(f"[群组锁] 群 {group_id} 获取锁超时 ({timeout}s)")
-            self._check_deadlock(group_id)  # 超时后再次检查是否有死锁
             return False
 
-    def _check_deadlock(self, group_id: int):
-        """
-        检查并处理死锁：如果锁被持有超过 max_hold_time，强制释放
-        """
-        if group_id in self._lock_acquired_time:
-            hold_time = time.time() - self._lock_acquired_time[group_id]
-            if hold_time > self._max_hold_time:
-                logger.warning(
-                    f"[群组锁] 群 {group_id} 检测到死锁！锁已被持有 {hold_time:.1f}s，超过最大持有时间 {self._max_hold_time}s，强制释放"
-                )
-                self.force_release(group_id)
-
     def release(self, group_id: int):
-        """释放群组锁"""
-        if group_id in self._locks:
-            lock = self._locks[group_id]
-            if lock.locked():
-                lock.release()
-                logger.debug(f"[群组锁] 群 {group_id} 释放锁成功")
-            # 清理获取时间记录
-            if group_id in self._lock_acquired_time:
-                hold_time = time.time() - self._lock_acquired_time[group_id]
-                del self._lock_acquired_time[group_id]
-                logger.debug(f"[群组锁] 群 {group_id} 锁持有时长: {hold_time:.1f}s")
-
-    def force_release(self, group_id: int):
-        """
-        强制释放锁（用于处理死锁）
-        """
-        if group_id in self._locks:
-            lock = self._locks[group_id]
-            if lock.locked():
-                try:
-                    lock.release()
-                    logger.warning(f"[群组锁] 群 {group_id} 强制释放锁")
-                except RuntimeError as e:
-                    logger.warning(f"[群组锁] 群 {group_id} 强制释放锁失败: {e}")
-            # 清理获取时间记录
-            if group_id in self._lock_acquired_time:
-                del self._lock_acquired_time[group_id]
-
-    def is_locked(self, group_id: int) -> bool:
-        """检查群组是否被锁定"""
-        if group_id in self._locks:
-            return self._locks[group_id].locked()
-        return False
-
-    def get_hold_time(self, group_id: int) -> float:
-        """获取锁的持有时间（秒）"""
-        if group_id in self._lock_acquired_time:
-            return time.time() - self._lock_acquired_time[group_id]
-        return 0.0
-
-    def cleanup_old_locks(self, max_age_seconds: float = 3600.0):
-        """清理过期的锁（释放内存）"""
-        current_time = time.time()
-        expired_groups = [
-            group_id for group_id, create_time in self._lock_creation_time.items()
-            if current_time - create_time > max_age_seconds and not self.is_locked(group_id)
-        ]
-        for group_id in expired_groups:
-            del self._locks[group_id]
-            del self._lock_creation_time[group_id]
-            if group_id in self._lock_acquired_time:
-                del self._lock_acquired_time[group_id]
-
-    def get_lock_status(self) -> dict:
-        """获取所有锁的状态（用于调试）"""
-        status = {}
-        for group_id, lock in self._locks.items():
-            hold_time = self.get_hold_time(group_id)
-            status[group_id] = {
-                "locked": lock.locked(),
-                "hold_time": hold_time,
-                "age": time.time() - self._lock_creation_time.get(group_id, 0)
-            }
-        return status
+        lock = self._get_lock(group_id)
+        if lock.locked():
+            lock.release()
 
 
-# 全局锁管理器实例
 group_lock_manager = GroupLockManager()
 
 
@@ -271,145 +166,152 @@ async def process_my_logic(
     message_id: int,
     text: str,
     llm_text: str,
-    normal_images: list[str],
-    stickers: list[str],
-    flash_images: list[str],
-    faces: list[str],
+    normal_images: list,
+    stickers: list,
+    flash_images: list,
+    faces: list,
     group_id: int,
     user_id: int,
     nickname: str,
     card: str,
     role: str,
-    raw_msg: any,
+    raw_msg: str,
     reply_message_id: Optional[int] = None,
     message_timestamp: Optional[str] = None,
     target_message_id: Optional[int] = None,
-):
+) -> None:
     """
-    处理消息回复逻辑
-
-    Args:
-        reply_message_id: 原始消息中引用的消息 ID（如果用户在引用某条消息）
-        target_message_id: 决策引擎选择要回复的消息 ID
+    执行机器人回复逻辑的核心函数。
+    使用群组锁防止同一群组的并发回复。
     """
-    logger.info(f"[process_my_logic] 开始处理 消息ID={message_id}, 群组={group_id}, 目标消息ID={target_message_id}")
-    
-    # 获取群组锁，防止并发冲突
     lock_acquired = await group_lock_manager.acquire(group_id, timeout=60.0)
     if not lock_acquired:
-        logger.warning(f"[process_my_logic] 群 {group_id} 获取锁失败，跳过处理")
+        logger.warning(f"群组 {group_id} 获取回复锁失败，跳过")
         return
-    
-    # 标记开始生成回复
-    generating_reply_groups.add(group_id)
 
+    generating_reply_groups.add(group_id)
     try:
-        # 注意：已移除消息去重功能，由模型自己判断是否回复
+        user_name = card or nickname or str(user_id)
+
+        logger.info(
+            f"[回复] 群{group_id} 准备调用 AI 回复: "
+            f"用户={user_name}, 目标消息ID={target_message_id}, 原始消息ID={message_id}"
+        )
+
         reply_data = await get_chat_reply(
-            group_id,
-            card,
-            llm_text,
+            group_id=group_id,
+            user_name=user_name,
+            current_msg=llm_text,
             user_id=user_id,
             reply_message_id=reply_message_id,
             bot=bot,
             message_timestamp=message_timestamp,
         )
-        reply_text = reply_data.get("text")
-        sticker_url = reply_data.get("sticker")
 
-        if reply_text or sticker_url:
-            if reply_text:
-                # 清理引用格式后再存储，避免AI模仿
-                clean_reply = clean_reply_format(reply_text)
-                await db_manager.add_chat_log(group_id, f"self:{clean_reply}")
+        reply_text = reply_data.get("text") if reply_data else None
+        sticker_url = reply_data.get("sticker") if reply_data else None
 
-            is_reply = False
-            if reply_text and "[回复]" in reply_text:
-                is_reply = True
-                # 清理AI可能模仿的引用格式 [回复@名字:内容]
-                reply_text = clean_reply_format(reply_text)
-                reply_text = reply_text.replace("[回复]", "").strip()
+        if not reply_text and not sticker_url:
+            logger.warning(f"群组 {group_id} AI 返回空回复")
+            return
 
-            # 确定引用消息 ID（优先级从高到低）
-            # 1. target_message_id: 决策引擎选择要回复的消息 ID（最准确）
-            # 2. reply_message_id: 用户原始消息中引用的消息 ID
-            # 3. message_id: 当前触发消息的 ID（兜底）
-            actual_reply_id = target_message_id or reply_message_id or message_id
-            logger.debug(
-                f"[引用ID] target_message_id={target_message_id}, reply_message_id={reply_message_id}, message_id={message_id} -> actual_reply_id={actual_reply_id}"
-            )
+        logger.info(f"[回复] 群{group_id} AI 回复内容: {(reply_text or '')[:50]}...")
 
-            # 如果决策引擎选择了没有 message_id 的旧消息，则不使用引用
-            use_reply = is_reply and target_message_id is not None
+        if reply_text:
+            clean_reply = clean_reply_format(reply_text)
+            await db_manager.add_chat_log(group_id, f"self:{clean_reply}")
 
-            if reply_text:
-                segments = split_text_to_segments(reply_text)
-                for i, seg in enumerate(segments):
-                    msg_segments = []
+        # 检测 [回复] 标签 → 转换为真实 QQ 引用回复
+        is_reply = False
+        if reply_text and "[回复]" in reply_text:
+            is_reply = True
+            reply_text = clean_reply_format(reply_text)
+            reply_text = reply_text.replace("[回复]", "").strip()
 
-                    if i == 0:
-                        if use_reply:
-                            msg_segments.append(MessageSegment.reply(actual_reply_id))
+        # 确定引用消息 ID（优先级：决策选择 > 用户引用 > 当前消息）
+        actual_reply_id = target_message_id or reply_message_id or message_id
+        logger.debug(
+            f"[引用ID] target={target_message_id}, reply={reply_message_id}, "
+            f"msg={message_id} → actual={actual_reply_id}"
+        )
+        use_reply = is_reply and target_message_id is not None
 
-                    parts = re.split(r"(\[at:.*?\])", seg)
-                    for part in parts:
-                        if part.startswith("[at:") and part.endswith("]"):
-                            target_name = part[4:-1].strip()
-                            target_id = await db_manager.get_user_id_by_name(group_id, target_name)
-                            if target_id:
-                                msg_segments.append(MessageSegment.at(target_id))
-                            else:
-                                msg_segments.append(MessageSegment.text(f"@{target_name}"))
-                        elif part:
-                            msg_segments.append(MessageSegment.text(part))
+        # 文字回复：按换行分段，每段独立发送
+        if reply_text:
+            text_segments = split_text_to_segments(reply_text)
+            for i, seg in enumerate(text_segments):
+                msg_segments = []
 
-                    if msg_segments:
-                        await bot.send(event, Message(msg_segments), at_sender=False)
+                # 仅第一段带引用标记
+                if i == 0:
+                    if use_reply:
+                        msg_segments.append(MessageSegment.reply(actual_reply_id))
 
-                    if i < len(segments) - 1 or sticker_url:
-                        delay = min(1.5, max(0.3, len(seg) * 0.08))
-                        await asyncio.sleep(delay + random.uniform(0.1, 0.5))
+                # [at:用户名] → 真实 @
+                parts = re.split(r"(\[at:.*?\])", seg)
+                for part in parts:
+                    if part.startswith("[at:") and part.endswith("]"):
+                        target_name = part[4:-1].strip()
+                        target_id = await db_manager.get_user_id_by_name(group_id, target_name)
+                        if target_id:
+                            msg_segments.append(MessageSegment.at(target_id))
+                        else:
+                            msg_segments.append(MessageSegment.text(f"@{target_name}"))
+                    elif part:
+                        msg_segments.append(MessageSegment.text(part))
 
-            if sticker_url:
-                try:
-                    await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
-                    logger.info(f"成功发送表情包: {sticker_url[:50]}...")
-                except Exception as e:
-                    logger.warning(f"发送表情包失败: {e}, URL: {sticker_url[:50]}...")
-                    # 如果是临时链接导致的失败，删除缓存中的该表情包
-                    if sticker_url.startswith("http"):
-                        # 获取标签，然后删除相关的表情包缓存
-                        sticker_pattern = r"\[\s*表情\s*[:：]\s*(.*?)\s*\]"
-                        match = re.search(sticker_pattern, reply_text)
-                        if match:
-                            tag = match.group(1).strip()
-                            logger.warning(f"表情包 '{tag}' 的 URL 已失效，将从缓存中移除")
-                            # TODO: 可以在这里添加删除过期表情包的逻辑
+                if msg_segments:
+                    await bot.send(event, Message(msg_segments), at_sender=False)
 
-            logger.info(f"[{role}] {card}({user_id}) 唤醒了{bot_config.bot_name}")
-            logger.debug(f"清洗后文本 (LLM): {llm_text}")
-            logger.debug(f"{bot_config.bot_name}回复: {reply_text}")
+                # 多段消息之间延时
+                if i < len(text_segments) - 1 or sticker_url:
+                    delay = min(1.5, max(0.3, len(seg) * 0.08))
+                    await asyncio.sleep(delay + random.uniform(0.1, 0.5))
+
+        # 表情包发送
+        if sticker_url:
+            try:
+                await bot.send(event, MessageSegment.image(sticker_url), at_sender=False)
+                logger.info(f"成功发送表情包: {sticker_url[:50]}...")
+            except Exception as e:
+                logger.warning(f"发送表情包失败: {e}, URL: {sticker_url[:50]}...")
+                logger.debug(f"表情包发送失败，URL可能已过期")
+
+        logger.info(f"群组 {group_id} 回复完成")
+
+        # 触发记忆固化
+        asyncio.create_task(consolidate_memories(group_id))
 
     except Exception as e:
-        error_msg = str(e)
-        try:
-            error_type = type(e).__name__
-        except:
-            error_type = "Exception"
-        logger.error(f"处理消息时发生异常 [{error_type}]", extra={"error_msg": error_msg}, exc_info=True)
+        logger.opt(exception=True).error(f"群组 {group_id} 回复出错: {type(e).__name__}: {e}")
     finally:
-        # 回复处理完成，移除生成状态并更新冷却时间
         generating_reply_groups.discard(group_id)
         last_decision_times[group_id] = time.time()
-        # 释放群组锁
         group_lock_manager.release(group_id)
         logger.debug(f"群组 {group_id} 回复完成，锁已释放，冷却时间已更新")
+
+
+async def _check_bot_left_recently(group_id: int, history_messages: list[str]) -> bool:
+    """
+    判断 bot 是否"离开较久"，值得触发扫描
+
+    检查历史消息中 bot 是否发言过。
+    如果完全没有 bot 的发言记录 → bot 离开较久 → 应该扫描
+    """
+    bot_name = bot_config.bot_name
+    for msg in history_messages:
+        if msg.startswith(f"{bot_name}:") or msg.startswith(f"{bot_name} "):
+            return False
+    return True
 
 
 async def deferred_decision_worker(group_id: int, bot: Bot):
     """
     延迟决策工人：等待冷却期结束并执行决策
     使用队列机制确保每个消息独立处理，防止并发竞态
+
+    新增扫描模式：当冷却结束 + 积压多条消息 + bot 离开较久时，
+    先用扫描模式批量判断是否有值得加入的话题，而非逐条调用 AI
     """
     try:
         while True:
@@ -418,8 +320,6 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
             remaining = bot_config.decision_interval - (now - last_time)
 
             if remaining <= 0:
-                # 冷却期已过，检查是否有待处理消息
-                # 确保当前没有正在进行的决策，也没有正在生成的回复
                 logger.debug(
                     f"[延迟工人] 群{group_id} 冷却期已过，pending={pending_decisions.get(group_id)}, "
                     f"deciding={group_id in deciding_groups}, generating={group_id in generating_reply_groups}"
@@ -429,21 +329,152 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                     and group_id not in deciding_groups
                     and group_id not in generating_reply_groups
                 ):
-                    # 从队列中获取最早的消息上下文（FIFO）
-                    ctx = None
-                    if group_id in group_pending_contexts and group_pending_contexts[group_id]:
-                        ctx = group_pending_contexts[group_id][0]  # 查看队首元素但不移除
+                    queue = list(group_pending_contexts.get(group_id, []))
+                    if not queue:
+                        pass
+                    else:
+                        # 判断是否应该触发扫描模式
+                        # 条件1: 积压 ≥ SCAN_MIN_QUEUE_SIZE 条
+                        # 条件2: 距离上次扫描 ≥ SCAN_MIN_INTERVAL 秒
+                        # 条件3: 本小时扫描次数 < SCAN_MAX_PER_HOUR
+                        # 条件4: bot 最近历史中发言占比 < 20%（离开较久）
+                        # 条件5: 心情不低于最低阈值（心情差时不扫描）
+                        last_scan_time = last_scan_times.get(group_id, 0)
+                        should_scan = (
+                            len(queue) >= SCAN_MIN_QUEUE_SIZE
+                            and (now - last_scan_time) >= SCAN_MIN_INTERVAL
+                        )
 
-                    if ctx:
-                        # 标记为已处理，防止重复触发
+                        if should_scan:
+                            # 检查每小时扫描上限
+                            hour_start = int(now // 3600) * 3600
+                            if group_id in hourly_scan_counts:
+                                prev_hour_start, count = hourly_scan_counts[group_id]
+                                if prev_hour_start != hour_start:
+                                    count = 0
+                            else:
+                                count = 0
+                            if count >= SCAN_MAX_PER_HOUR:
+                                should_scan = False
+                                logger.debug(
+                                    f"[扫描条件] 群{group_id} 本小时已扫描{count}次≥上限{SCAN_MAX_PER_HOUR}，不触发"
+                                )
+
+                        if should_scan:
+                            # 检查心情（心情过低时不扫描）
+                            try:
+                                mood = await db_manager.get_mood(group_id)
+                            except Exception:
+                                mood = 50
+                            SCAN_MOOD_MIN = 35
+                            if mood < SCAN_MOOD_MIN:
+                                should_scan = False
+                                logger.debug(
+                                    f"[扫描条件] 群{group_id} 心情{mood} < {SCAN_MOOD_MIN}，不触发扫描"
+                                )
+
+                        if should_scan:
+                            # 提前查一次历史，复用
+                            try:
+                                history = await db_manager.get_chat_log(group_id, limit=20)
+                                history_messages = []
+                                for item in history:
+                                    clean_msg = clean_reply_format(item["message"])
+                                    history_messages.append(clean_msg)
+                            except Exception:
+                                history_messages = []
+
+                            should_scan = await _check_bot_left_recently(group_id, history_messages)
+
+                        if should_scan:
+                            logger.info(f"[扫描模式] 群{group_id} 积压{len(queue)}条消息，bot离开较久，触发扫描决策")
+                            last_scan_times[group_id] = now
+                            # 记录本小时扫描次数
+                            hour_start = int(now // 3600) * 3600
+                            if group_id not in hourly_scan_counts or hourly_scan_counts[group_id][0] != hour_start:
+                                hourly_scan_counts[group_id] = (hour_start, 1)
+                            else:
+                                prev_hour, prev_count = hourly_scan_counts[group_id]
+                                hourly_scan_counts[group_id] = (prev_hour, prev_count + 1)
+                            pending_decisions[group_id] = False
+                            deciding_groups.add(group_id)
+
+                            try:
+                                scan_decision = await should_i_scan_join(group_id, queue, history_messages)
+
+                                mood_impact = scan_decision.get("mood_impact", 0)
+                                if mood_impact != 0:
+                                    await db_manager.update_mood(group_id, mood_impact)
+
+                                if scan_decision.get("should_reply"):
+                                    ctx = scan_decision.get("target_context", queue[-1])
+                                    logger.info(
+                                        f"[扫描模式-加入] 理由: {scan_decision.get('reason')} "
+                                        f"回复: {ctx.get('display_name')}"
+                                    )
+
+                                    decision = {
+                                        "should_reply": True,
+                                        "mood_impact": mood_impact,
+                                        "interest_score": scan_decision.get("interest_score", 0.5),
+                                        "selected_user": scan_decision.get("reply_to_user", ctx.get("display_name")),
+                                        "reply_to_user": scan_decision.get("reply_to_user", ctx.get("display_name")),
+                                        "target_message_content": ctx.get("llm_text", ""),
+                                        "target_message_id": ctx.get("message_id"),
+                                    }
+
+                                    await db_manager.record_bot_reply(
+                                        group_id,
+                                        ctx.get("display_name", "未知"),
+                                        is_at_bot=False,
+                                        interest_score=decision["interest_score"],
+                                    )
+
+                                    # 清空队列，但保留提到 bot 名字的消息（防止误丢）
+                                    _safe_clear_queue(group_id, bot_config.bot_name)
+
+                                    # 更新冷却时间（防止回复后立即再次触发）
+                                    last_decision_times[group_id] = time.time()
+
+                                    await process_my_logic(
+                                        bot=bot,
+                                        event=ctx["event"],
+                                        message_id=ctx["message_id"],
+                                        text=ctx["text"],
+                                        llm_text=decision["target_message_content"],
+                                        normal_images=ctx["normal_images"],
+                                        stickers=ctx["stickers"],
+                                        flash_images=ctx["flash_images"],
+                                        faces=ctx["faces"],
+                                        group_id=group_id,
+                                        user_id=ctx["user_id"],
+                                        nickname=ctx["nickname"],
+                                        card=decision["selected_user"],
+                                        role=ctx["role"],
+                                        raw_msg=ctx["raw_msg"],
+                                        reply_message_id=ctx.get("reply_message_id"),
+                                        message_timestamp=ctx.get("timestamp"),
+                                        target_message_id=decision.get("target_message_id"),
+                                    )
+                                else:
+                                    logger.info(
+                                        f"[扫描模式-不加入] 理由: {scan_decision.get('reason')}，"
+                                        f"清空{len(queue)}条消息"
+                                    )
+                                    _safe_clear_queue(group_id, bot_config.bot_name)
+                                    last_decision_times[group_id] = time.time()
+                            finally:
+                                deciding_groups.discard(group_id)
+                            continue
+
+                        # ===== 常规逐条处理模式 =====
+                        ctx = queue[0]
                         pending_decisions[group_id] = False
                         deciding_groups.add(group_id)
 
                         try:
-                            # 判断是否包含表情包
                             is_sticker_msg = len(ctx.get("stickers", [])) > 0
 
-                            # 执行决策（注意：不在此时更新冷却时间，而是在回复完成后更新）
                             decision = await should_i_reply(
                                 group_id,
                                 ctx["display_name"],
@@ -453,12 +484,10 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                 is_sticker=is_sticker_msg,
                             )
 
-                            # 更新心情
                             mood_impact = decision.get("mood_impact", 0)
                             if mood_impact != 0:
                                 await db_manager.update_mood(group_id, mood_impact)
 
-                            # 只有 should_reply 为 True 且兴趣度足够高时才回复
                             interest_score = decision.get("interest_score", 0)
                             should_reply_flag = decision.get("should_reply")
                             logger.info(
@@ -467,23 +496,20 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                             )
                             if should_reply_flag and interest_score >= bot_config.interest_threshold:
                                 logger.info(f"[延迟工人-进入回复分支] 准备记录回复行为")
-                                # 记录 bot 回复行为
                                 await db_manager.record_bot_reply(
                                     group_id, ctx["display_name"], is_at_bot=False, interest_score=interest_score
                                 )
                                 logger.info(f"[延迟工人-回复行为已记录] 准备从队列移除消息")
-                                # 从队列中移除已处理的消息
                                 if group_id in group_pending_contexts and group_pending_contexts[group_id]:
                                     group_pending_contexts[group_id].popleft()
                                     logger.info(
                                         f"[延迟工人-消息已移除] 队列剩余: {len(group_pending_contexts[group_id])}"
                                     )
 
-                                # 执行回复逻辑
-                                selected_user = decision.get("selected_user", ctx["display_name"])  # 选定消息的发送者
-                                target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
+                                selected_user = decision.get("selected_user", ctx["display_name"])
+                                target_user = decision.get("reply_to_user", selected_user)
                                 target_msg = decision.get("target_message_content", ctx["llm_text"])
-                                target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
+                                target_msg_id = decision.get("target_message_id")
                                 logger.info(
                                     f"[延迟工人-准备调用process_my_logic] 消息ID={ctx['message_id']}, 目标消息ID={target_msg_id}"
                                 )
@@ -492,7 +518,7 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     event=ctx["event"],
                                     message_id=ctx["message_id"],
                                     text=ctx["text"],
-                                    llm_text=target_msg,  # 使用 AI 选择的消息内容(纯文本,不含用户名)
+                                    llm_text=target_msg,
                                     normal_images=ctx["normal_images"],
                                     stickers=ctx["stickers"],
                                     flash_images=ctx["flash_images"],
@@ -500,19 +526,17 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     group_id=group_id,
                                     user_id=ctx["user_id"],
                                     nickname=ctx["nickname"],
-                                    card=selected_user,  # 使用选定消息的发送者作为回复对象
+                                    card=selected_user,
                                     role=ctx["role"],
                                     raw_msg=ctx["raw_msg"],
-                                    reply_message_id=ctx.get("reply_message_id"),  # 传递引用消息 ID
-                                    message_timestamp=ctx.get("timestamp"),  # 传递时间戳
-                                    target_message_id=target_msg_id,  # 传递决策引擎选择的message_id
+                                    reply_message_id=ctx.get("reply_message_id"),
+                                    message_timestamp=ctx.get("timestamp"),
+                                    target_message_id=target_msg_id,
                                 )
-                            # 即使 AI 决定不回复，也有一定概率随机回复
                             elif random.random() < bot_config.reply_rate:
                                 await db_manager.record_bot_reply(
                                     group_id, ctx["display_name"], is_at_bot=False, interest_score=0.2
                                 )
-                                # 从队列中移除已处理的消息
                                 if group_id in group_pending_contexts and group_pending_contexts[group_id]:
                                     group_pending_contexts[group_id].popleft()
 
@@ -536,32 +560,23 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
                                     message_timestamp=ctx.get("timestamp"),
                                 )
                             else:
-                                # AI 决定不回复，从队列中移除该消息
                                 logger.info(f"[延迟工人-不回复] 未满足回复条件或兴趣度不足，更新冷却时间")
                                 if group_id in group_pending_contexts and group_pending_contexts[group_id]:
                                     group_pending_contexts[group_id].popleft()
-                                # 即使不回复，也要更新冷却时间，避免频繁调用决策引擎
                                 last_decision_times[group_id] = time.time()
                         finally:
-                            deciding_groups.remove(group_id)
-                else:
-                    # 队列为空或正在处理，等待下次检查
-                    pass
+                            deciding_groups.discard(group_id)
             else:
-                # 还在冷却期，等待剩余时间
                 await asyncio.sleep(min(remaining, 1.0))
 
-                # 如果队列为空，退出延迟决策任务
                 if group_id in group_pending_contexts and len(group_pending_contexts[group_id]) == 0:
                     break
 
                 continue
 
-            # 检查队列是否为空，为空则退出
             if group_id in group_pending_contexts and len(group_pending_contexts[group_id]) == 0:
                 break
 
-            # 短暂休眠避免 CPU 占用
             await asyncio.sleep(0.1)
 
     except asyncio.CancelledError:
@@ -569,9 +584,34 @@ async def deferred_decision_worker(group_id: int, bot: Bot):
     except Exception as e:
         logger.opt(exception=True).error(f"群组 {group_id} 的延迟决策任务发生异常: {e}")
     finally:
-        # 清理任务记录
         if group_id in active_deferred_tasks:
             del active_deferred_tasks[group_id]
+
+
+def _safe_clear_queue(group_id: int, bot_name: str) -> None:
+    """
+    安全清空队列：移除所有非活跃消息，但保留提到 bot 名字的消息
+
+    避免因为扫描模式清空队列时误丢"有人提到 bot"的消息
+    """
+    if group_id not in group_pending_contexts:
+        return
+
+    preserved = []
+    for ctx in list(group_pending_contexts[group_id]):
+        msg_text = ctx.get("llm_text", "")
+        if bot_name in msg_text:
+            preserved.append(ctx)
+            logger.info(f"[队列清理] 保留提及bot的消息: {msg_text[:30]}...")
+
+    group_pending_contexts[group_id].clear()
+    for ctx in preserved:
+        group_pending_contexts[group_id].append(ctx)
+
+    if preserved:
+        logger.info(f"[队列清理] 保留{len(preserved)}条提及bot的消息")
+    else:
+        logger.info(f"[队列清理] 队列已完全清空")
 
 
 # 创建一个响应所有消息的响应器
@@ -584,35 +624,29 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     """
     当接收到群消息时，NoneBot 会调用这个方法。
     """
-    # 注意：白名单/黑名单检查已在 bot.py 的事件预处理阶段完成
-    # 这里的消息已经通过了白名单检查
-
     group_id = event.group_id
     logger.debug(f"处理群 {group_id} 的消息")
 
     # 1. 基础信息
-    message_id = event.message_id  # 消息 ID
-    message_text = event.get_plaintext()  # 纯文本内容
-    group_id = event.group_id  # 群号
-    user_id = event.user_id  # 发送者 QQ 号
+    message_id = event.message_id
+    message_text = event.get_plaintext()
+    group_id = event.group_id
+    user_id = event.user_id
 
     # 2. 发送者详细信息
     sender = event.sender
-    nickname = sender.nickname
-    card = sender.card or nickname
-    # 使用全局昵称作为 AI 识别的名称，因为群名片更改太频繁
-    display_name = nickname
-    role = sender.role
+    nickname = sender.nickname or ""
+    display_name = extract_user_name(event)
+    role = sender.role or "member"
 
-    # 3. 提取各种消息段
-    normal_images = []  # 普通图片 URL
-    stickers = []  # 表情包 URL (sub_type=1)
-    flash_images = []  # 闪照 URL (type=flash)
-    faces = []  # 系统表情 ID (例如: 124 代表 [呲牙])
-    reply_message_id = None  # 引用消息 ID
+    # 3. 消息类型分类
+    normal_images = []
+    stickers = []
+    flash_images = []
+    faces = []
+    reply_message_id = None
 
     for segment in event.get_message():
-        # 处理图片
         if segment.type == "image":
             url = segment.data.get("url")
             sub_type = str(segment.data.get("sub_type", "0"))
@@ -625,13 +659,11 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             else:
                 normal_images.append(url)
 
-        # 处理系统表情
         elif segment.type == "face":
             face_id = segment.data.get("id")
             if face_id:
                 faces.append(face_id)
 
-        # 处理引用消息
         elif segment.type == "reply":
             reply_message_id = segment.data.get("message_id")
             if reply_message_id:
@@ -658,61 +690,23 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     except Exception as e:
         logger.debug(f"确保创造者记忆时出错: {e}")
 
-    # 更新用户名与 ID 的映射，用于后续艾特功能
-    # 同时存储群名片和 QQ 昵称，增加匹配成功率
+    # 更新用户名与 ID 的映射
     await db_manager.update_user_id_map(group_id, nickname, user_id)
     if sender.card and sender.card != nickname:
         await db_manager.update_user_id_map(group_id, sender.card, user_id)
 
     # 同步写入向量数据库 (长期记忆)
-    # 使用 create_task 异步处理，不影响当前响应速度
     async def store_and_consolidate():
         try:
-            # 1. 存入原始向量记录
             vectors = await get_embeddings([msg_to_store])
             await vector_db.add_memory(group_id, msg_to_store, vectors[0])
-
-            # 2. 性格进化与好感度更新
             await personality_manager.evolve_personality(group_id, display_name, llm_text, user_id=user_id)
-
-            # 3. 风格捕捉：暂时禁用（每N条消息触发一次，避免每条消息都调用AI）
-            # 注意：已禁用黑话分析模块以减少AI并发请求
-            # if group_id not in style_capture_counters:
-            #     style_capture_counters[group_id] = 0
-            #
-            # style_capture_counters[group_id] += 1
-            #
-            # history = await db_manager.get_chat_log(group_id, limit=20)
-            # history_messages = [entry["message"] for entry in history]
-            #
-            # if style_capture_counters[group_id] >= STYLE_CAPTURE_INTERVAL:
-            #     style_capture_counters[group_id] = 0  # 重置计数器
-            #     asyncio.create_task(
-            #         create_limited_task(personality_manager.capture_style_patterns(group_id, history_messages))
-            #     )
-            #     logger.debug(f"群 {group_id} 触发风格捕捉分析")
-            # else:
-            #     logger.debug(
-            #         f"群 {group_id} 风格捕捉冷却中 ({style_capture_counters[group_id]}/{STYLE_CAPTURE_INTERVAL})"
-            #     )
-            #
-            # # 黑话挖掘：限制调用频率，避免超时和API压力
-            # last_mining_time = last_slang_mining_times.get(group_id, 0)
-            # if time.time() - last_mining_time >= SLANG_MINING_INTERVAL:
-            #     last_slang_mining_times[group_id] = time.time()
-            #     asyncio.create_task(create_limited_task(personality_manager.mine_slang(group_id, history_messages)))
-            #     logger.debug(f"群 {group_id} 触发黑话挖掘分析")
-            # else:
-            #     logger.debug(f"群 {group_id} 黑话挖掘冷却中，跳过本次调用")
-
-            # 4. 尝试进行记忆固化 (每 50 条消息处理一次)
             await consolidate_memories(group_id)
         except Exception as e:
             logger.opt(exception=True).error("处理背景学习逻辑失败: {}", e)
 
     asyncio.create_task(create_limited_task(store_and_consolidate()))
 
-    # 获取当前消息时间戳（用于历史记录过滤）
     current_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # 7. 唤醒逻辑判断
@@ -720,20 +714,17 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     is_mentioned = bot_config.bot_name in message_text
     is_actively_engaged = is_at_me or is_mentioned
 
-    # 调试日志：记录艾特检测和消息段
     logger.info(
         f"[艾特检测] 群{group_id} is_at_me={is_at_me}, is_mentioned={is_mentioned}, "
         f"is_actively_engaged={is_actively_engaged}, event.is_tome()={event.is_tome()}"
     )
 
-    # 调试：打印消息段信息
     message_segments = []
     for seg in event.get_message():
         message_segments.append(f"{seg.type}:{seg.data}")
     logger.debug(f"[消息段] 群{group_id} 消息段: {message_segments}")
 
-    # 将当前消息上下文加入待处理队列（用于并发安全的延迟决策）
-    # 注意：只有非艾特消息才加入延迟队列，因为艾特消息会立即处理
+    # 非艾特消息加入延迟队列
     if not is_actively_engaged:
         if group_id not in group_pending_contexts:
             group_pending_contexts[group_id] = deque(maxlen=MAX_PENDING_CONTEXTS)
@@ -760,24 +751,18 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
     do_reply = False
     target_user = display_name
-
-    # 判断是否包含表情包
     is_sticker_msg = len(stickers) > 0
 
     if is_actively_engaged:
         logger.info(f"[艾特处理] 群{group_id} 检测到艾特，准备立即处理")
-        # 1. 被显式叫到了，肯定要回
-        # 更新强行唤醒时间，进入 5 分钟关注期
         last_wake_up_times[group_id] = time.time()
 
-        # 取消已存在的延迟决策任务，因为现在就要立刻处理
         if group_id in active_deferred_tasks:
             active_deferred_tasks[group_id].cancel()
             logger.info(f"[艾特处理] 群{group_id} 取消了延迟决策任务")
 
         pending_decisions[group_id] = False
 
-        # 艾特消息：使用较短超时快速获取锁（10秒），避免长时间等待
         lock_acquired = await group_lock_manager.acquire(group_id, timeout=10.0)
         if not lock_acquired:
             logger.warning(f"[艾特处理] 群 {group_id} 获取锁失败，跳过本次处理")
@@ -785,38 +770,31 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
 
         deciding_groups.add(group_id)
         try:
-            # 执行决策评估心情（注意：不在此时更新冷却时间，而是在回复完成后更新）
             decision = await should_i_reply(
                 group_id, display_name, llm_text, is_at_me=True, user_id=user_id, is_sticker=is_sticker_msg
             )
 
-            # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
             mood_impact = decision.get("mood_impact", 0)
             if mood_impact != 0:
                 await db_manager.update_mood(group_id, mood_impact)
 
             do_reply = True
             target_user = decision.get("reply_to_user", display_name)
-            target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容
-            target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
-            # 记录被艾特时的回复行为
+            target_msg = decision.get("target_message_content", llm_text)
+            target_msg_id = decision.get("target_message_id")
             interest_score = decision.get("interest_score", 0.8)
             await db_manager.record_bot_reply(group_id, display_name, is_at_bot=True, interest_score=interest_score)
         finally:
             deciding_groups.discard(group_id)
             group_lock_manager.release(group_id)
     else:
-        # 2. 没被叫到，尝试进行 AI 智能决策
-        # 首先检查当前是否在"作息表"允许的水群时间内
         if not await is_within_chat_time(group_id):
-            return  # 不在水群时间，且没被叫到，直接忽略
+            return
 
         current_time = time.time()
         last_time = last_decision_times.get(group_id, 0)
 
         if current_time - last_time >= bot_config.decision_interval:
-            # 过了冷却期，直接触发决策判断
-            # 非艾特消息：使用较长超时等待锁（30秒）
             lock_acquired = await group_lock_manager.acquire(group_id, timeout=30.0)
             if not lock_acquired:
                 logger.warning(f"[智能决策] 群 {group_id} 获取锁失败，跳过本次处理")
@@ -826,31 +804,25 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
             try:
                 pending_decisions[group_id] = False
 
-                # 执行决策（注意：不在此时更新冷却时间，而是在回复完成后更新）
                 decision = await should_i_reply(
                     group_id, display_name, llm_text, is_at_me=False, user_id=user_id, is_sticker=is_sticker_msg
                 )
 
-                # 实时更新心情 (只要决策引擎运行，就应用心情变动，无论是否决定回复)
                 mood_impact = decision.get("mood_impact", 0)
                 if mood_impact != 0:
                     await db_manager.update_mood(group_id, mood_impact)
 
-                # 只有 should_reply 为 True 且兴趣度足够高时才回复 (避免随意插话)
                 interest_score = decision.get("interest_score", 0)
                 logger.info(
                     f"[决策判断] should_reply={decision.get('should_reply', False)}, "
-                    f"interest_score={interest_score}, threshold={bot_config.interest_threshold}, "
-                    f"is_at_me={is_at_me}"
+                    f"interest_score={interest_score}, threshold={bot_config.interest_threshold}"
                 )
                 if decision.get("should_reply", False) and interest_score >= bot_config.interest_threshold:
                     do_reply = True
                     logger.info(f"[触发回复] 兴趣度 {interest_score} >= 阈值 {bot_config.interest_threshold}")
-                    # 记录回复行为
                     await db_manager.record_bot_reply(
                         group_id, display_name, is_at_bot=False, interest_score=interest_score
                     )
-                # 即使 AI 决定不回复，也有一定概率随机回复
                 elif random.random() < bot_config.reply_rate:
                     do_reply = True
                     logger.info(f"[随机回复] 触发随机回复")
@@ -860,23 +832,20 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
                 else:
                     logger.info(f"[不回复] 未满足回复条件，更新冷却时间")
                     do_reply = False
-                    # 即使不回复，也要更新冷却时间，避免频繁调用决策引擎
                     last_decision_times[group_id] = time.time()
 
-                selected_user = decision.get("selected_user", display_name)  # 选定消息的发送者
-                target_user = decision.get("reply_to_user", selected_user)  # AI选择的回复对象
-                target_msg = decision.get("target_message_content", llm_text)  # 使用 AI 选择的消息内容(纯文本)
-                target_msg_id = decision.get("target_message_id")  # 获取决策引擎选择的message_id
+                selected_user = decision.get("selected_user", display_name)
+                target_user = decision.get("reply_to_user", selected_user)
+                target_msg = decision.get("target_message_content", llm_text)
+                target_msg_id = decision.get("target_message_id")
             finally:
                 deciding_groups.discard(group_id)
                 group_lock_manager.release(group_id)
         else:
-            # 还在冷却期内，只要有消息就标记为"待处理"，确保冷却结束后一定会判断
             pending_decisions[group_id] = True
             remaining_time = bot_config.decision_interval - (current_time - last_time)
             logger.info(f"[冷却中] 群{group_id} 剩余冷却时间 {remaining_time:.1f}秒，已加入延迟决策队列")
 
-            # 如果没有正在运行的延迟工人，则启动一个
             if group_id not in active_deferred_tasks:
                 task = asyncio.create_task(deferred_decision_worker(group_id, bot))
                 active_deferred_tasks[group_id] = task
@@ -884,13 +853,12 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
     if not do_reply:
         return
 
-    # --- 调用处理逻辑 ---
     await process_my_logic(
         bot=bot,
         event=event,
         message_id=message_id,
         text=message_text,
-        llm_text=target_msg,  # 使用 AI 选择的消息内容进行回复
+        llm_text=target_msg,
         normal_images=normal_images,
         stickers=stickers,
         flash_images=flash_images,
@@ -898,10 +866,10 @@ async def handle_group_message(bot: Bot, event: GroupMessageEvent):
         group_id=group_id,
         user_id=user_id,
         nickname=nickname,
-        card=target_user,  # 使用决策引擎确定的目标用户
+        card=target_user,
         role=role,
         raw_msg=raw_message,
-        reply_message_id=reply_message_id,  # 传递引用消息 ID
-        message_timestamp=current_timestamp,  # 传递时间戳用于历史记录过滤
-        target_message_id=target_msg_id,  # 传递决策引擎选择的message_id
+        reply_message_id=reply_message_id,
+        message_timestamp=current_timestamp,
+        target_message_id=target_msg_id,
     )
